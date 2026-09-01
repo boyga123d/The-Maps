@@ -62,7 +62,7 @@ MAX_HISTORY_POINTS = 100
 ZONE_LAYERS: tuple[tuple[str, str, str, str], ...] = (
     ("migrations", "Migration", "zone_migration.png", "#ff9800"),
     ("patrol_zones", "Patrol", "zone_patrol.png", "#ab47bc"),
-    ("Ô Vuông", "Ô Vuông", "number.png", "#0a0ef0"),
+    ("Ô Vuông", "Ô Vuông", "number.png", "#1708ec"),
 )
 
 @dataclass(frozen=True)
@@ -246,18 +246,28 @@ class MiniMapPanel:
         self.hide()
 
     def _set_clickthrough(self, clickthrough: bool) -> None:
+        """Hàm thiết lập chế độ Click-through chuẩn Windows API (Xuyên chuột hoàn toàn)"""
         try:
             self.window.update_idletasks()
             user32 = ctypes.windll.user32
-            hwnd = user32.GetAncestor(self.window.winfo_id(), 2)
-            style = user32.GetWindowLongW(hwnd, -20)
+            # Lấy Handle chuẩn xác của cửa sổ Tkinter trên Windows
+            hwnd = user32.GetParent(self.window.winfo_id())
+            if not hwnd: 
+                hwnd = self.window.winfo_id()
+                
+            style = user32.GetWindowLongW(hwnd, -20) # GWL_EXSTYLE
             WS_EX_TRANSPARENT = 0x00000020
+            WS_EX_LAYERED = 0x00080000
             WS_EX_NOACTIVATE = 0x08000000
+            
             if clickthrough:
-                style |= (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
+                # Bật chế độ xuyên chuột (Transparent + Layered)
+                style |= (WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE)
             else:
+                # Tắt xuyên chuột để có thể kéo thả
                 style &= ~WS_EX_TRANSPARENT
-                style |= WS_EX_NOACTIVATE
+                style |= (WS_EX_LAYERED | WS_EX_NOACTIVATE)
+                
             user32.SetWindowLongW(hwnd, -20, style)
         except Exception: pass
 
@@ -415,15 +425,21 @@ class QuestPanel:
         try:
             self.window.update_idletasks()
             user32 = ctypes.windll.user32
-            hwnd = user32.GetAncestor(self.window.winfo_id(), 2)
+            hwnd = user32.GetParent(self.window.winfo_id())
+            if not hwnd: 
+                hwnd = self.window.winfo_id()
+                
             style = user32.GetWindowLongW(hwnd, -20)
             WS_EX_TRANSPARENT = 0x00000020
+            WS_EX_LAYERED = 0x00080000
             WS_EX_NOACTIVATE = 0x08000000
+            
             if clickthrough:
-                style |= (WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
+                style |= (WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE)
             else:
                 style &= ~WS_EX_TRANSPARENT
-                style |= WS_EX_NOACTIVATE
+                style |= (WS_EX_LAYERED | WS_EX_NOACTIVATE)
+                
             user32.SetWindowLongW(hwnd, -20, style)
         except Exception: pass
 
@@ -522,6 +538,8 @@ class MapApp:
 
         self.last_clipboard = ""
         self.source_image: Image.Image | None = None
+        self.map_image: ImageTk.PhotoImage | None = None
+        self.rendered_size: tuple[int, int] | None = None
         self.tray_icon: pystray.Icon | None = None
         
         self.global_escape = threading.Event()
@@ -602,7 +620,7 @@ class MapApp:
         x = (sw - w) // 2
         y = (sh - h) // 2
         self.ingame_map_window.geometry(f"{w}x{h}+{x}+{y}")
-        self._set_window_noactivate(self.ingame_map_window) # Không cướp Focus chuột của The Isle
+        self._set_window_noactivate(self.ingame_map_window)
         self.ingame_map_window.withdraw()
 
         self._build_ui()
