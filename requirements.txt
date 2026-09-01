@@ -1,0 +1,6 @@
+Pillow>=10.0,<12
+pystray==0.19.5
+pywebview>=5.3,<6
+requests>=2.31,<3
+psutil>=5.9
+scapy>=2.6
