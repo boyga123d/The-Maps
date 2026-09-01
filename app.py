@@ -62,7 +62,7 @@ MAX_HISTORY_POINTS = 100
 ZONE_LAYERS: tuple[tuple[str, str, str, str], ...] = (
     ("migrations", "Migration", "zone_migration.png", "#ff9800"),
     ("patrol_zones", "Patrol", "zone_patrol.png", "#ab47bc"),
-    ("Ô Vuông", "Ô Vuông", "number.png", "#ab47bc"),
+    ("Ô Vuông", "Ô Vuông", "number.png", "#0a0ef0"),
 )
 
 @dataclass(frozen=True)
@@ -78,26 +78,25 @@ TEXT_OFFSET_X = 0
 TEXT_OFFSET_Y = 0
 
 # ========================================================
-# TỌA ĐỘ VÙNG CÓ TÊN (ĐÃ GIẢI MÃ TỪ PIXEL -> IN-GAME RAW)
+# TỌA ĐỘ VÙNG CÓ TÊN (ĐÃ BÙ TRỪ X-76000, Y-54000)
 # ========================================================
 MAP_LABELS = [
-    # --- KHU VỰC ĐỊA LÝ LỚN (Vàng Cam) ---
-    ("Delta", Position(70411.0, 206414.0, 0.0), "#f1c40f", 14),
-    ("East\nCoast", Position(-142334.0, 680270.0, 0.0), "#f1c40f", 14),
-    ("Eastern\nJungle", Position(-104428.0, 406995.0, 0.0), "#f1c40f", 14),
-    ("Forks\nPlains", Position(-127526.0, 286377.0, 0.0), "#f1c40f", 14),
-    ("Highland", Position(-127032.0, -128740.0, 0.0), "#f1c40f", 14),
-    ("Central\nJungle", Position(-41147.0, 65738.0, 0.0), "#f1c40f", 14),
-    ("Lagoon", Position(342088.0, -100716.0, 0.0), "#f1c40f", 14),
-    ("Mudflats", Position(143953.0, -300658.0, 0.0), "#f1c40f", 14),
-    ("North\nPlains", Position(-336052.0, 350033.0, 0.0), "#f1c40f", 14),
-    ("Northern\nJungle", Position(-306804.0, 175317.0, 0.0), "#f1c40f", 14),
-    ("Ridges", Position(-206100.0, -209682.0, 0.0), "#f1c40f", 14),
-    ("South Plains", Position(258432.0, -259458.0, 0.0), "#f1c40f", 14),
-    ("Swamps", Position(306567.0, 63270.0, 0.0), "#f1c40f", 14),
-    ("The Pit", Position(335671.0, -406837.0, 0.0), "#f1c40f", 14),
-    ("West Rail", Position(25004.0, -255705.0, 0.0), "#f1c40f", 14),
-    ("Water\nAccess", Position(-204161.0, 84988.0, 0.0), "#f1c40f", 14),
+    ("Delta", Position(70411.0, 206414.0, 0.0), "#f1c40f", 10),
+    ("East\nCoast", Position(-142334.0, 680270.0, 0.0), "#f1c40f", 10),
+    ("Eastern\nJungle", Position(-104428.0, 406995.0, 0.0), "#f1c40f", 10),
+    ("Forks\nPlains", Position(-127526.0, 286377.0, 0.0), "#f1c40f", 10),
+    ("Highland", Position(-127032.0, -128740.0, 0.0), "#f1c40f", 10),
+    ("Central\nJungle", Position(-41147.0, 65738.0, 0.0), "#f1c40f", 10),
+    ("Lagoon", Position(342088.0, -100716.0, 0.0), "#f1c40f", 10),
+    ("Mudflats", Position(143953.0, -300658.0, 0.0), "#f1c40f", 10),
+    ("North\nPlains", Position(-336052.0, 350033.0, 0.0), "#f1c40f", 10),
+    ("Northern\nJungle", Position(-306804.0, 175317.0, 0.0), "#f1c40f", 10),
+    ("Ridges", Position(-206100.0, -209682.0, 0.0), "#f1c40f", 10),
+    ("South Plains", Position(258432.0, -259458.0, 0.0), "#f1c40f", 10),
+    ("Swamps", Position(306567.0, 63270.0, 0.0), "#f1c40f", 10),
+    ("The Pit", Position(335671.0, -406837.0, 0.0), "#f1c40f", 10),
+    ("West Rail", Position(25004.0, -255705.0, 0.0), "#f1c40f", 10),
+    ("Water\nAccess", Position(-204161.0, 84988.0, 0.0), "#f1c40f", 10),
 ]
 
 @dataclass(frozen=True)
@@ -247,7 +246,6 @@ class MiniMapPanel:
         self.hide()
 
     def _set_clickthrough(self, clickthrough: bool) -> None:
-        """Hàm thiết lập chế độ Click-through (Chuột xuyên qua HUD vào game)"""
         try:
             self.window.update_idletasks()
             user32 = ctypes.windll.user32
@@ -508,6 +506,9 @@ class MapApp:
         self.current_hotkey_vk = HOTKEYS["Tab"]
         self.move_hotkey_name = "F2"
         self.move_hotkey_vk = HOTKEYS["F2"]
+        self.ingame_hotkey_name = "M"
+        self.ingame_hotkey_vk = HOTKEYS["M"]
+        
         self.minimap_opacity = 1.0
         self.minimap_shape = "Vuông"
         self.show_regions_var = ctk.BooleanVar(value=True)
@@ -521,27 +522,46 @@ class MapApp:
 
         self.last_clipboard = ""
         self.source_image: Image.Image | None = None
-        self.map_image: ImageTk.PhotoImage | None = None
-        self.rendered_size: tuple[int, int] | None = None
         self.tray_icon: pystray.Icon | None = None
+        
         self.global_escape = threading.Event()
+        self.ingame_escape = threading.Event()
         self.last_clipboard_sequence = ctypes.windll.user32.GetClipboardSequenceNumber()
 
-        self.zoom = MIN_ZOOM
-        self.center_nx = 0.5
-        self.center_ny = 0.5
-        self._view: tuple[float, float, float, float] | None = None
-        self._pan_last: tuple[int, int] | None = None
-        self._pending_hq_job: str | None = None
-        
-        self._x_offset = 0.0
-        self._y_offset = 0.0
-        self._canvas_w = 1
-        self._canvas_h = 1
+        # STATE CHO MENU MAP
+        self.m_zoom = MIN_ZOOM
+        self.m_center_nx = 0.5
+        self.m_center_ny = 0.5
+        self.m_view: tuple[float, float, float, float] | None = None
+        self._m_pan_last: tuple[int, int] | None = None
+        self._m_pending_hq_job: str | None = None
+        self.m_x_offset = 0.0
+        self.m_y_offset = 0.0
+        self.m_canvas_w = 1
+        self.m_canvas_h = 1
+        self.m_placeholder_rect = None
+        self.m_map_image: ImageTk.PhotoImage | None = None
+        self.m_rendered_size: tuple[int, int] | None = None
+
+        # STATE CHO INGAME MAP
+        self.ig_zoom = MIN_ZOOM
+        self.ig_center_nx = 0.5
+        self.ig_center_ny = 0.5
+        self.ig_view: tuple[float, float, float, float] | None = None
+        self._ig_pan_last: tuple[int, int] | None = None
+        self._ig_pending_hq_job: str | None = None
+        self.ig_x_offset = 0.0
+        self.ig_y_offset = 0.0
+        self.ig_canvas_w = 1
+        self.ig_canvas_h = 1
+        self.ig_placeholder_rect = None
+        self.ig_map_image: ImageTk.PhotoImage | None = None
+        self.ig_rendered_size: tuple[int, int] | None = None
 
         self._zone_images: dict[str, Image.Image] = {}
         self._zone_visible: dict[str, bool] = {key: True for key, _label, _filename, _color in ZONE_LAYERS}
-        self._zone_toggle_hitboxes: dict[str, tuple[float, float, float, float]] = {}
+        self._m_zone_toggle_hitboxes: dict[str, tuple[float, float, float, float]] = {}
+        self._ig_zone_toggle_hitboxes: dict[str, tuple[float, float, float, float]] = {}
 
         self._islepilot_cred_path = DATA_ROOT / "islepilot.cred"
         self._islepilot_session: islepilot.IslePilotSession | None = None
@@ -559,13 +579,31 @@ class MapApp:
         self._npcap_prompted = False
 
         self.map_visible = False
+        self.ingame_map_visible = False
 
         self.root.title(f"The-Maps v{APP_VERSION}")
         if APP_ICON_ICO.exists(): self.root.iconbitmap(default=str(APP_ICON_ICO))
-        self.root.geometry("400x700")
+        self.root.geometry("400x720")
         self.root.resizable(False, False)
         self.root.attributes("-topmost", True)
         self.root.protocol("WM_DELETE_WINDOW", self._exit)
+
+        # KHỞI TẠO CỬA SỔ INGAME MAP OVERLAY
+        self.ingame_map_window = tk.Toplevel(self.root)
+        self.ingame_map_window.overrideredirect(True)
+        self.ingame_map_window.attributes("-topmost", True)
+        self.ingame_map_window.attributes("-alpha", 0.95)
+        self.ingame_map_window.configure(bg="#10191d")
+        
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w = int(sh * 0.85)
+        h = int(sh * 0.85)
+        x = (sw - w) // 2
+        y = (sh - h) // 2
+        self.ingame_map_window.geometry(f"{w}x{h}+{x}+{y}")
+        self._set_window_noactivate(self.ingame_map_window) # Không cướp Focus chuột của The Isle
+        self.ingame_map_window.withdraw()
 
         self._build_ui()
         self._load_map_image()
@@ -584,6 +622,17 @@ class MapApp:
         self._update_notified = False
         self.root.after(5000, self._check_for_update)
 
+    def _set_window_noactivate(self, window: tk.Toplevel) -> None:
+        try:
+            window.update_idletasks()
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetAncestor(window.winfo_id(), 2)
+            style = user32.GetWindowLongW(hwnd, -20)
+            WS_EX_NOACTIVATE = 0x08000000
+            style |= WS_EX_NOACTIVATE
+            user32.SetWindowLongW(hwnd, -20, style)
+        except Exception: pass
+
     def _load_app_config(self) -> MapProfile:
         selected_map = ""
         if CONFIG_PATH.exists():
@@ -598,6 +647,10 @@ class MapApp:
                 if m_hk in HOTKEYS:
                     self.move_hotkey_name = m_hk
                     self.move_hotkey_vk = HOTKEYS[m_hk]
+                ig_hk = data.get("ingame_hotkey", "M")
+                if ig_hk in HOTKEYS:
+                    self.ingame_hotkey_name = ig_hk
+                    self.ingame_hotkey_vk = HOTKEYS[ig_hk]
                 self.minimap_opacity = data.get("minimap_opacity", 1.0)
                 self.show_regions_var.set(data.get("show_regions", True))
                 self.minimap_shape = data.get("minimap_shape", "Vuông")
@@ -610,6 +663,7 @@ class MapApp:
             "map": self.profile.profile_id,
             "hotkey": self.current_hotkey_name,
             "move_hotkey": self.move_hotkey_name,
+            "ingame_hotkey": self.ingame_hotkey_name,
             "minimap_opacity": self.minimap_opacity,
             "show_regions": self.show_regions_var.get(),
             "minimap_shape": self.shape_var.get()
@@ -636,16 +690,22 @@ class MapApp:
         hk_frame.pack(fill="x", padx=20, pady=(5, 5))
         hk_frame.grid_columnconfigure(0, weight=1)
         hk_frame.grid_columnconfigure(1, weight=1)
+        hk_frame.grid_columnconfigure(2, weight=1)
 
-        ctk.CTkLabel(hk_frame, text="Phím Ẩn/Hiện:").grid(row=0, column=0, sticky="w", padx=(0, 5))
-        self.hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_hotkey_change, width=150)
+        ctk.CTkLabel(hk_frame, text="Ẩn/Hiện:").grid(row=0, column=0, sticky="w", padx=(0, 2))
+        self.hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_hotkey_change, width=105)
         self.hotkey_combo.set(self.current_hotkey_name)
-        self.hotkey_combo.grid(row=1, column=0, sticky="w", pady=(0, 10), padx=(0, 5))
+        self.hotkey_combo.grid(row=1, column=0, sticky="w", pady=(0, 10), padx=(0, 2))
 
-        ctk.CTkLabel(hk_frame, text="Phím Di chuyển HUD:").grid(row=0, column=1, sticky="w", padx=(5, 0))
-        self.move_hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_move_hotkey_change, width=150)
+        ctk.CTkLabel(hk_frame, text="Map Ingame:").grid(row=0, column=1, sticky="w", padx=(2, 2))
+        self.ingame_hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_ingame_hotkey_change, width=105)
+        self.ingame_hotkey_combo.set(self.ingame_hotkey_name)
+        self.ingame_hotkey_combo.grid(row=1, column=1, sticky="w", pady=(0, 10), padx=(2, 2))
+
+        ctk.CTkLabel(hk_frame, text="Kéo HUD:").grid(row=0, column=2, sticky="w", padx=(2, 0))
+        self.move_hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_move_hotkey_change, width=105)
         self.move_hotkey_combo.set(self.move_hotkey_name)
-        self.move_hotkey_combo.grid(row=1, column=1, sticky="w", pady=(0, 10), padx=(5, 0))
+        self.move_hotkey_combo.grid(row=1, column=2, sticky="w", pady=(0, 10), padx=(2, 0))
 
         ctk.CTkLabel(self.control_frame, text="Độ mờ MiniMap & Nhiệm vụ:").pack(anchor="w", padx=20, pady=(0, 0))
         self.opacity_slider = ctk.CTkSlider(self.control_frame, from_=0.2, to=1.0, command=self._on_opacity_change)
@@ -674,11 +734,20 @@ class MapApp:
         self.islepilot_status_var = tk.StringVar(value=self._islepilot_status_text())
         ctk.CTkLabel(self.control_frame, textvariable=self.islepilot_status_var, text_color="#4caf50", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=20)
         
+        islepilot_btn_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
+        islepilot_btn_frame.pack(fill="x", padx=20, pady=(5, 10))
+        
         self.btn_islepilot = ctk.CTkButton(
-            self.control_frame, text="Đăng nhập Steam", 
+            islepilot_btn_frame, text="Đăng nhập Steam", 
             fg_color="#2b7a2b", hover_color="#1e541e", command=self._on_connect_click
         )
-        self.btn_islepilot.pack(fill="x", padx=20, pady=(5, 10))
+        self.btn_islepilot.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        self.btn_islepilot_token = ctk.CTkButton(
+            islepilot_btn_frame, text="Nhập Token Web", 
+            fg_color="#2980b9", hover_color="#1f618d", command=self._on_manual_token_click
+        )
+        self.btn_islepilot_token.pack(side="right", fill="x", expand=True)
 
         ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=5)
 
@@ -696,24 +765,42 @@ class MapApp:
         ctk.CTkButton(footer, text="Youtube", width=120, fg_color="#555555", hover_color="#333333", command=lambda: webbrowser.open(YOUTUBE_URL)).pack(side="left")
         ctk.CTkButton(footer, text="Discord", width=120, fg_color="#5865F2", hover_color="#4752C4", command=lambda: webbrowser.open(DISCORD_URL)).pack(side="right")
 
-        # --- KHUNG BẢN ĐỒ ---
+        # --- KHUNG BẢN ĐỒ CHÍNH (MENU) ---
         self.map_frame = ctk.CTkFrame(self.root, corner_radius=0)
-        
-        self.canvas = tk.Canvas(self.map_frame, background="#000000", highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        self.canvas.bind("<Configure>", lambda _event: self._redraw())
-        self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
-        self.canvas.bind("<ButtonPress-1>", self._on_pan_start)
-        self.canvas.bind("<B1-Motion>", self._on_pan_move)
-        self.canvas.bind("<ButtonRelease-1>", self._on_pan_end)
-        self.canvas.bind("<Double-Button-1>", self._on_reset_view)
+        self.menu_canvas = tk.Canvas(self.map_frame, background="#000000", highlightthickness=0)
+        self.menu_canvas.pack(fill="both", expand=True)
+        self.menu_canvas.bind("<Configure>", lambda e: self._redraw_menu())
+        self.menu_canvas.bind("<MouseWheel>", lambda e: self._on_mouse_wheel(e, False))
+        self.menu_canvas.bind("<ButtonPress-1>", lambda e: self._on_pan_start(e, False))
+        self.menu_canvas.bind("<B1-Motion>", lambda e: self._on_pan_move(e, False))
+        self.menu_canvas.bind("<ButtonRelease-1>", lambda e: self._on_pan_end(e, False))
+        self.menu_canvas.bind("<Double-Button-1>", lambda e: self._on_reset_view(e, False))
+
+        # --- KHUNG BẢN ĐỒ INGAME (M) ---
+        self.ingame_canvas = tk.Canvas(self.ingame_map_window, background="#000000", highlightthickness=2, highlightbackground="#f1c40f")
+        self.ingame_canvas.pack(fill="both", expand=True)
+        self.ingame_canvas.bind("<Configure>", lambda e: self._redraw_ingame())
+        self.ingame_canvas.bind("<MouseWheel>", lambda e: self._on_mouse_wheel(e, True))
+        self.ingame_canvas.bind("<ButtonPress-1>", lambda e: self._on_pan_start(e, True))
+        self.ingame_canvas.bind("<B1-Motion>", lambda e: self._on_pan_move(e, True))
+        self.ingame_canvas.bind("<ButtonRelease-1>", lambda e: self._on_pan_end(e, True))
+        self.ingame_canvas.bind("<Double-Button-1>", lambda e: self._on_reset_view(e, True))
         
         self._update_statuses()
 
     def _update_statuses(self):
         self.local_status_var.set(self._local_status_text())
         self.islepilot_status_var.set(self._islepilot_status_text())
-        self.btn_islepilot.configure(text="Ngắt kết nối" if self._islepilot_connected() else "Đăng nhập Steam")
+        
+        if self._islepilot_connected():
+            self.btn_islepilot.configure(text="Ngắt kết nối", state="normal")
+            if hasattr(self, 'btn_islepilot_token'):
+                self.btn_islepilot_token.configure(state="disabled")
+        else:
+            self.btn_islepilot.configure(text="Đăng nhập Steam", state="normal")
+            if hasattr(self, 'btn_islepilot_token'):
+                self.btn_islepilot_token.configure(state="normal")
+                
         self.root.after(500, self._update_statuses)
 
     def _on_hotkey_change(self, choice: str) -> None:
@@ -724,6 +811,11 @@ class MapApp:
             self.btn_toggle_map.configure(text=f"ẨN BẢN ĐỒ (Phím {self.current_hotkey_name})")
         else:
             self.btn_toggle_map.configure(text=f"MỞ BẢN ĐỒ (Phím {self.current_hotkey_name})")
+
+    def _on_ingame_hotkey_change(self, choice: str) -> None:
+        self.ingame_hotkey_name = choice
+        self.ingame_hotkey_vk = HOTKEYS[choice]
+        self._save_app_config()
 
     def _on_move_hotkey_change(self, choice: str) -> None:
         self.move_hotkey_name = choice
@@ -761,26 +853,58 @@ class MapApp:
             self.islepilot_status_var.set("Đang mở cửa sổ đăng nhập Steam…")
             self._islepilot_login_async(lambda: self.btn_islepilot.configure(state="normal"))
 
+    def _on_manual_token_click(self):
+        if self._islepilot_connected():
+            self._islepilot_disconnect()
+        else:
+            dialog = ctk.CTkInputDialog(text="Dán Token lấy từ trang web IslePilot vào đây:", title="Nhập Token IslePilot")
+            token = dialog.get_input()
+            if token and token.strip():
+                self.btn_islepilot_token.configure(state="disabled")
+                self.btn_islepilot.configure(state="disabled")
+                self.islepilot_status_var.set("Đang kết nối bằng Token...")
+                steam_id = "ManualWeb"
+                islepilot.save_credentials(self._islepilot_cred_path, steam_id, token.strip())
+                self._islepilot_start_session(steam_id, token.strip())
+
+    def _toggle_ingame_map(self) -> None:
+        if self.ingame_map_visible:
+            self.ingame_map_window.withdraw()
+            self.ingame_map_visible = False
+        else:
+            if self.map_visible:
+                self._toggle_map_view()
+            self.ingame_map_window.deiconify()
+            self.ingame_map_window.lift()
+            self.ingame_map_visible = True
+            self._redraw_ingame()
+
     def _toggle_map_view(self) -> None:
+        if getattr(self, 'ingame_map_visible', False):
+            self._toggle_ingame_map()
+            
         hk_text = self.current_hotkey_name
         if self.map_visible:
             self.map_frame.pack_forget()
-            self.root.geometry("400x700")
+            self.root.geometry("400x720")
             self.root.resizable(False, False)
             self.btn_toggle_map.configure(text=f"MỞ BẢN ĐỒ (Phím {hk_text})", fg_color=["#3a7ebf", "#1f538d"], hover_color=["#325882", "#14375e"])
             self.map_visible = False
         else:
-            self.root.geometry("1100x700")
+            self.root.geometry("1100x720")
             self.root.resizable(True, True) 
             self.map_frame.pack(side="right", fill="both", expand=True, padx=(5, 0))
             self.btn_toggle_map.configure(text=f"ẨN BẢN ĐỒ (Phím {hk_text})", fg_color="#c0392b", hover_color="#922b21")
             self.map_visible = True
-            self._redraw()
+            self._redraw_menu()
 
     def _poll_global_escape_event(self) -> None:
         if self.global_escape.is_set():
             self.global_escape.clear()
             self._toggle_map_view()
+        if getattr(self, 'ingame_escape', None) and self.ingame_escape.is_set():
+            self.ingame_escape.clear()
+            self._toggle_ingame_map()
         self.root.after(20, self._poll_global_escape_event)
 
     def _hide_map_tab(self, _event=None):
@@ -788,6 +912,8 @@ class MapApp:
         return "break"
 
     def _show_map(self) -> None:
+        if getattr(self, 'ingame_map_visible', False):
+            self._toggle_ingame_map()
         if not self.map_visible:
             self._toggle_map_view()
         self.root.deiconify()
@@ -824,10 +950,16 @@ class MapApp:
         def keyboard_hook(code, message, data):
             if code >= 0 and message in (0x0100, 0x0104):
                 event = ctypes.cast(data, ctypes.POINTER(KeyboardEvent)).contents
-                if event.vk_code == self.current_hotkey_vk: 
-                    self.global_escape.set()
+                current_time = time.time()
+                if event.vk_code == self.current_hotkey_vk:
+                    if current_time - getattr(self, '_last_menu_toggle', 0) > 0.3:
+                        self._last_menu_toggle = current_time
+                        self.global_escape.set()
+                elif event.vk_code == getattr(self, 'ingame_hotkey_vk', None):
+                    if current_time - getattr(self, '_last_ig_toggle', 0) > 0.3:
+                        self._last_ig_toggle = current_time
+                        self.ingame_escape.set()
                 elif event.vk_code == self.move_hotkey_vk:
-                    current_time = time.time()
                     if current_time - getattr(self, '_last_move_toggle', 0) > 0.3:
                         self._last_move_toggle = current_time
                         if self._hud is not None:
@@ -941,10 +1073,13 @@ class MapApp:
         
         if self._hud is None: self._hud = IslePilotHud(self.root, opacity=self.minimap_opacity)
         self._hud.update_map(self.source_image, self.profile, position.x, position.y, self._local_heading_deg, zone_images=self._active_zone_images(), path_history=self.path_history, show_regions=self.show_regions_var.get(), shape=self.minimap_shape)
-        if self.map_visible: self._redraw()
+        self._redraw()
 
     def _islepilot_status_text(self) -> str:
-        if self._islepilot_steam_id: return f"Đã kết nối · Steam ...{self._islepilot_steam_id[-4:]}"
+        if self._islepilot_steam_id:
+            if self._islepilot_steam_id == "ManualWeb":
+                return "Đã kết nối · Token Web"
+            return f"Đã kết nối · Steam ...{self._islepilot_steam_id[-4:]}"
         return "Chưa kết nối"
 
     def _islepilot_connected(self) -> bool: return self._islepilot_steam_id is not None
@@ -1022,7 +1157,9 @@ class MapApp:
                 self.current = position
                 position_changed = True
                 
-        if (position_changed or heading_changed) and self.map_visible: self._redraw()
+        if position_changed or heading_changed: 
+            self._redraw()
+            
         draw_position = position or self.current
         if self._hud is not None and draw_position is not None:
             heading = self._islepilot_heading_deg if self._islepilot_heading_deg is not None else 0.0
@@ -1055,9 +1192,19 @@ class MapApp:
             webbrowser.open(GITHUB_RELEASE_PAGE)
 
     def _load_map_image(self) -> None:
-        self._cancel_hq_job()
-        self.source_image, self.map_image, self.rendered_size = None, None, None
-        self.zoom, self.center_nx, self.center_ny = MIN_ZOOM, 0.5, 0.5
+        self.m_zoom = self.ig_zoom = MIN_ZOOM
+        self.m_center_nx = self.ig_center_nx = 0.5
+        self.m_center_ny = self.ig_center_ny = 0.5
+        self.m_view = self.ig_view = None
+        self._m_pan_last = self._ig_pan_last = None
+        self._m_pending_hq_job = self._ig_pending_hq_job = None
+        self.m_x_offset = self.ig_x_offset = 0.0
+        self.m_y_offset = self.ig_y_offset = 0.0
+        self.m_canvas_w = self.ig_canvas_w = 1
+        self.m_canvas_h = self.ig_canvas_h = 1
+        self.m_placeholder_rect = self.ig_placeholder_rect = None
+        self.m_map_image = self.ig_map_image = None
+        self.m_rendered_size = self.ig_rendered_size = None
         
         if self.profile.image_path:
             try: self.source_image = Image.open(self.profile.image_path).convert("RGB")
@@ -1097,27 +1244,46 @@ class MapApp:
             self._local_heading_deg = None
         self._show_map()
 
-    def _clamp_view(self) -> None:
-        view_w = view_h = 1.0 / self.zoom
-        max_left, max_top = max(0.0, 1.0 - view_w), max(0.0, 1.0 - view_h)
-        left = min(max(self.center_nx - view_w / 2, 0.0), max_left)
-        top = min(max(self.center_ny - view_h / 2, 0.0), max_top)
-        self.center_nx, self.center_ny = left + view_w / 2, top + view_h / 2
-        self._view = (left, top, view_w, view_h)
+    def _redraw(self):
+        if self.map_visible: self._redraw_menu()
+        if self.ingame_map_visible: self._redraw_ingame()
 
-    def _redraw(self, resample: int | None = None) -> None:
+    def _redraw_menu(self, resample: int | None = None) -> None:
         if not self.map_visible: return
-        canvas = self.canvas
+        self._render_map(self.menu_canvas, False, resample)
+
+    def _redraw_ingame(self, resample: int | None = None) -> None:
+        if not self.ingame_map_visible: return
+        self._render_map(self.ingame_canvas, True, resample)
+
+    def _render_map(self, canvas: tk.Canvas, is_ingame: bool, resample: int | None = None) -> None:
+        zoom = self.ig_zoom if is_ingame else self.m_zoom
+        center_nx = self.ig_center_nx if is_ingame else self.m_center_nx
+        center_ny = self.ig_center_ny if is_ingame else self.m_center_ny
+        rendered_size = self.ig_rendered_size if is_ingame else self.m_rendered_size
+        
         c_w, c_h = max(canvas.winfo_width(), 1), max(canvas.winfo_height(), 1)
         canvas.delete("all")
 
+        view_w = view_h = 1.0 / zoom
+        max_left, max_top = max(0.0, 1.0 - view_w), max(0.0, 1.0 - view_h)
+        left = min(max(center_nx - view_w / 2, 0.0), max_left)
+        top = min(max(center_ny - view_h / 2, 0.0), max_top)
+        center_nx, center_ny = left + view_w / 2, top + view_h / 2
+        view = (left, top, view_w, view_h)
+        
+        if is_ingame:
+            self.ig_center_nx, self.ig_center_ny = center_nx, center_ny
+            self.ig_view = view
+        else:
+            self.m_center_nx, self.m_center_ny = center_nx, center_ny
+            self.m_view = view
+
         if self.source_image:
-            self._clamp_view()
-            view_left, view_top, view_w, view_h = self._view
             source_width, source_height = self.source_image.size
-            crop_left, crop_top = max(0, int(view_left * source_width)), max(0, int(view_top * source_height))
-            crop_right = min(source_width, max(crop_left + 1, round((view_left + view_w) * source_width)))
-            crop_bottom = min(source_height, max(crop_top + 1, round((view_top + view_h) * source_height)))
+            crop_left, crop_top = max(0, int(left * source_width)), max(0, int(top * source_height))
+            crop_right = min(source_width, max(crop_left + 1, round((left + view_w) * source_width)))
+            crop_bottom = min(source_height, max(crop_top + 1, round((top + view_h) * source_height)))
             crop_box = (crop_left, crop_top, crop_right, crop_bottom)
             
             view_pixel_w = crop_right - crop_left
@@ -1126,188 +1292,262 @@ class MapApp:
             draw_w = max(1, int(view_pixel_w * scale))
             draw_h = max(1, int(view_pixel_h * scale))
             
-            self._canvas_w = draw_w
-            self._canvas_h = draw_h
-            self._x_offset = (c_w - draw_w) / 2.0
-            self._y_offset = (c_h - draw_h) / 2.0
+            x_offset = (c_w - draw_w) / 2.0
+            y_offset = (c_h - draw_h) / 2.0
+            
+            if is_ingame:
+                self.ig_canvas_w, self.ig_canvas_h = draw_w, draw_h
+                self.ig_x_offset, self.ig_y_offset = x_offset, y_offset
+                self.ig_placeholder_rect = None
+            else:
+                self.m_canvas_w, self.m_canvas_h = draw_w, draw_h
+                self.m_x_offset, self.m_y_offset = x_offset, y_offset
+                self.m_placeholder_rect = None
 
             resample_filter = resample if resample is not None else Image.Resampling.LANCZOS
             active_zone_keys = tuple(key for key, _l, _f, _c in ZONE_LAYERS if self._zone_visible.get(key) and key in self._zone_images)
             cache_key = (crop_box, (draw_w, draw_h), resample_filter, active_zone_keys)
             
-            if self.rendered_size != cache_key:
+            if rendered_size != cache_key:
                 cropped = self.source_image.crop(crop_box).convert("RGBA")
                 for key in active_zone_keys: cropped.alpha_composite(self._zone_images[key].crop(crop_box))
                 resized = cropped.resize((draw_w, draw_h), resample_filter)
-                self.map_image = ImageTk.PhotoImage(resized)
-                self.rendered_size = cache_key
+                photo = ImageTk.PhotoImage(resized)
+                if is_ingame:
+                    self.ig_map_image = photo
+                    self.ig_rendered_size = cache_key
+                else:
+                    self.m_map_image = photo
+                    self.m_rendered_size = cache_key
                 
-            canvas.create_image(self._x_offset + draw_w / 2, self._y_offset + draw_h / 2, image=self.map_image)
-            self._placeholder_rect = None
+            image_to_draw = self.ig_map_image if is_ingame else self.m_map_image
+            canvas.create_image(x_offset + draw_w / 2, y_offset + draw_h / 2, image=image_to_draw)
         else:
-            self._view = None
-            self._x_offset = 0
-            self._y_offset = 0
-            self._canvas_w = c_w
-            self._canvas_h = c_h
+            if is_ingame:
+                self.ig_view = None
+                self.ig_x_offset = self.ig_y_offset = 0
+                self.ig_canvas_w, self.ig_canvas_h = c_w, c_h
+            else:
+                self.m_view = None
+                self.m_x_offset = self.m_y_offset = 0
+                self.m_canvas_w, self.m_canvas_h = c_w, c_h
             
             margin = 24
-            left, top = margin, margin
+            r_left, r_top = margin, margin
             map_width, map_height = c_w - margin * 2, c_h - margin * 2
-            self._placeholder_rect = (left, top, map_width, map_height)
-            canvas.create_rectangle(left, top, left + map_width, top + map_height, fill="#26343a", outline="#607d8b", width=2)
+            rect = (r_left, r_top, map_width, map_height)
+            if is_ingame: self.ig_placeholder_rect = rect
+            else: self.m_placeholder_rect = rect
+            
+            canvas.create_rectangle(r_left, r_top, r_left + map_width, r_top + map_height, fill="#26343a", outline="#607d8b", width=2)
             for step in range(1, 10):
-                x = left + map_width * step / 10
-                y = top + map_height * step / 10
-                canvas.create_line(x, top, x, top + map_height, fill="#34474f")
-                canvas.create_line(left, y, left + map_width, y, fill="#34474f")
+                x = r_left + map_width * step / 10
+                y = r_top + map_height * step / 10
+                canvas.create_line(x, r_top, x, r_top + map_height, fill="#34474f")
+                canvas.create_line(r_left, y, r_left + map_width, y, fill="#34474f")
             canvas.create_text(c_w / 2, c_h / 2, text=f"{self.profile.name}\nChưa có ảnh map", fill="#b0bec5", font=("Segoe UI", 16), justify="center")
 
-        self._draw_zone_toggles()
+        self._draw_zone_toggles_on(canvas, is_ingame)
         
         # Vẽ Tên Khu vực
         if self.show_regions_var.get() and MAP_LABELS:
             for name, pos, color, size in MAP_LABELS:
-                x, y = self._pixel(pos)
-                _draw_text_with_outline(self.canvas, x + TEXT_OFFSET_X, y + TEXT_OFFSET_Y, name, size, color)
+                x, y = self._pixel(pos, is_ingame)
+                _draw_text_with_outline(canvas, x + TEXT_OFFSET_X, y + TEXT_OFFSET_Y, name, size, color)
 
-        self._draw_history_path()
-        
+        # Vẽ History Path
+        positions = self.path_history + ([self.current] if self.current else [])
+        if len(positions) >= 2:
+            points = []
+            for position in positions:
+                x, y = self._pixel(position, is_ingame)
+                points.extend((x, y))
+            canvas.create_line(*points, fill="#d4e3e8", width=2, dash=(3, 7))
+            
+        for pos in self.path_history:
+            x, y = self._pixel(pos, is_ingame)
+            canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill="#55a8c9", outline="white", width=2)
+
+        # Vẽ Marker hiện tại
         if self.current:
             heading = self._current_heading_degrees()
-            if heading is None: self._draw_marker(self.current, 12, "#ff5b45")
+            x, y = self._pixel(self.current, is_ingame)
+            if heading is None: 
+                canvas.create_oval(x - 12, y - 12, x + 12, y + 12, fill="#ff5b45", outline="white", width=2)
             else:
-                x, y = self._pixel(self.current)
-                _draw_heading_polygon(self.canvas, x, y, heading, 14, "#ff5b45")
+                _draw_heading_polygon(canvas, x, y, heading, 14, "#ff5b45")
 
-    def _pixel(self, position: Position) -> tuple[float, float]:
+    def _pixel(self, position: Position, is_ingame: bool) -> tuple[float, float]:
         nx, ny = self.profile.to_normalized(position)
-        return self._normalized_to_pixel(nx, ny)
-
-    def _normalized_to_pixel(self, nx: float, ny: float) -> tuple[float, float]:
-        if self._view is not None:
-            view_left, view_top, view_w, view_h = self._view
-            x = (nx - view_left) / view_w * self._canvas_w
-            y = (ny - view_top) / view_h * self._canvas_h
-            return x + getattr(self, '_x_offset', 0), y + getattr(self, '_y_offset', 0)
-        left, top, width, height = self._placeholder_rect
-        return left + nx * width, top + ny * height
+        view = self.ig_view if is_ingame else self.m_view
+        c_w = self.ig_canvas_w if is_ingame else self.m_canvas_w
+        c_h = self.ig_canvas_h if is_ingame else self.m_canvas_h
+        x_off = self.ig_x_offset if is_ingame else self.m_x_offset
+        y_off = self.ig_y_offset if is_ingame else self.m_y_offset
+        rect = self.ig_placeholder_rect if is_ingame else self.m_placeholder_rect
+        
+        if view is None and rect is not None:
+            left, top, width, height = rect
+            return left + nx * width, top + ny * height
+            
+        if view is not None:
+            view_left, view_top, view_w, view_h = view
+            x = (nx - view_left) / view_w * c_w
+            y = (ny - view_top) / view_h * c_h
+            return x + x_off, y + y_off
+        return 0, 0
 
     def _active_zone_images(self) -> tuple["Image.Image", ...]:
         return tuple(self._zone_images[key] for key, _l, _f, _c in ZONE_LAYERS if self._zone_visible.get(key) and key in self._zone_images)
 
-    def _draw_zone_toggles(self) -> None:
-        self._zone_toggle_hitboxes = {}
+    def _draw_zone_toggles_on(self, canvas: tk.Canvas, is_ingame: bool) -> None:
+        hitboxes = {}
         if not self._zone_images: return
         margin, chip_h = 12, 26
-        x, y = margin, self.canvas.winfo_height() - margin - chip_h
+        x, y = margin, canvas.winfo_height() - margin - chip_h
         for key, label, _filename, color in ZONE_LAYERS:
             if key not in self._zone_images: continue
             active = self._zone_visible.get(key, False)
             text = f"{'✓' if active else '○'} {label}"
-            text_id = self.canvas.create_text(x + 10, y + chip_h / 2, text=text, fill="#10191d" if active else "#cfd8dc", font=("Segoe UI", 9, "bold"), anchor="w")
-            bbox = self.canvas.bbox(text_id)
+            text_id = canvas.create_text(x + 10, y + chip_h / 2, text=text, fill="#10191d" if active else "#cfd8dc", font=("Segoe UI", 9, "bold"), anchor="w")
+            bbox = canvas.bbox(text_id)
             chip_w = (bbox[2] - bbox[0]) + 20 if bbox else 90
-            rect_id = self.canvas.create_rectangle(x, y, x + chip_w, y + chip_h, fill=color if active else "#1b262c", outline=color, width=1.5)
-            self.canvas.tag_lower(rect_id, text_id)
-            self._zone_toggle_hitboxes[key] = (x, y, x + chip_w, y + chip_h)
+            rect_id = canvas.create_rectangle(x, y, x + chip_w, y + chip_h, fill=color if active else "#1b262c", outline=color, width=1.5)
+            canvas.tag_lower(rect_id, text_id)
+            hitboxes[key] = (x, y, x + chip_w, y + chip_h)
             x += chip_w + 8
-
-    def _draw_marker(self, position, radius, color):
-        x, y = self._pixel(position)
-        self.canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=color, outline="white", width=2)
-
-    def _draw_history_path(self):
-        positions = self.path_history + ([self.current] if self.current else [])
-        if len(positions) < 2: return
-        points: list[float] = []
-        for position in positions:
-            x, y = self._pixel(position)
-            points.extend((x, y))
-        
-        self.canvas.create_line(*points, fill="#d4e3e8", width=2, dash=(3, 7))
-        
-        for pos in self.path_history:
-            self._draw_marker(pos, 4, "#55a8c9")
+        if is_ingame:
+            self._ig_zone_toggle_hitboxes = hitboxes
+        else:
+            self._m_zone_toggle_hitboxes = hitboxes
 
     def _current_heading_degrees(self) -> float | None:
         if self._local_position_fresh() and self._local_heading_deg is not None: return self._local_heading_deg
         if self._islepilot_heading_deg is not None: return self._islepilot_heading_deg
         if self.current and self.path_history:
             prev = self.path_history[-1]
-            x1, y1 = self._pixel(prev)
-            x2, y2 = self._pixel(self.current)
-            dx, dy = x2 - x1, y2 - y1
-            if math.hypot(dx, dy) >= 2:
+            x1, y1 = self.current.x, self.current.y
+            px, py = prev.x, prev.y
+            nx1, ny1 = self.profile.to_normalized(prev)
+            nx2, ny2 = self.profile.to_normalized(self.current)
+            dx, dy = nx2 - nx1, ny2 - ny1
+            if math.hypot(dx, dy) > 0.0001:
                 return math.degrees(math.atan2(dx, -dy)) % 360.0
         return None
 
-    def _schedule_hq_redraw(self) -> None:
-        self._cancel_hq_job()
-        self._pending_hq_job = self.root.after(HQ_REDRAW_DELAY_MS, self._hq_redraw)
-
-    def _cancel_hq_job(self) -> None:
-        if self._pending_hq_job is not None:
-            try: self.root.after_cancel(self._pending_hq_job)
-            except tk.TclError: pass
-            self._pending_hq_job = None
-
-    def _hq_redraw(self) -> None:
-        self._pending_hq_job = None
-        self._redraw()
-
-    def _on_mouse_wheel(self, event) -> None:
-        if not self.source_image or self._view is None: return
+    def _schedule_hq_redraw_menu(self):
+        if self._m_pending_hq_job:
+            self.root.after_cancel(self._m_pending_hq_job)
+        self._m_pending_hq_job = self.root.after(HQ_REDRAW_DELAY_MS, self._hq_redraw_menu)
         
-        real_x = event.x - getattr(self, '_x_offset', 0)
-        real_y = event.y - getattr(self, '_y_offset', 0)
+    def _hq_redraw_menu(self):
+        self._m_pending_hq_job = None
+        self._redraw_menu()
+
+    def _schedule_hq_redraw_ingame(self):
+        if self._ig_pending_hq_job:
+            self.root.after_cancel(self._ig_pending_hq_job)
+        self._ig_pending_hq_job = self.root.after(HQ_REDRAW_DELAY_MS, self._hq_redraw_ingame)
         
-        if not (0 <= real_x <= self._canvas_w and 0 <= real_y <= self._canvas_h):
-            return
-            
-        view_left, view_top, view_w, view_h = self._view
-        cursor_nx = view_left + (real_x / self._canvas_w) * view_w
-        cursor_ny = view_top + (real_y / self._canvas_h) * view_h
+    def _hq_redraw_ingame(self):
+        self._ig_pending_hq_job = None
+        self._redraw_ingame()
+
+    def _on_mouse_wheel(self, event, is_ingame=False) -> None:
+        if not self.source_image: return
+        x_off = self.ig_x_offset if is_ingame else self.m_x_offset
+        y_off = self.ig_y_offset if is_ingame else self.m_y_offset
+        c_w = self.ig_canvas_w if is_ingame else self.m_canvas_w
+        c_h = self.ig_canvas_h if is_ingame else self.m_canvas_h
+        view = self.ig_view if is_ingame else self.m_view
+        zoom = self.ig_zoom if is_ingame else self.m_zoom
+        
+        if view is None: return
+        real_x = event.x - x_off
+        real_y = event.y - y_off
+        if not (0 <= real_x <= c_w and 0 <= real_y <= c_h): return
+        
+        view_left, view_top, view_w, view_h = view
+        cursor_nx = view_left + (real_x / c_w) * view_w
+        cursor_ny = view_top + (real_y / c_h) * view_h
         
         factor = ZOOM_STEP if event.delta > 0 else (1.0 / ZOOM_STEP)
-        new_zoom = min(MAX_ZOOM, max(MIN_ZOOM, self.zoom * factor))
-        if new_zoom == self.zoom: return
-        self.zoom = new_zoom
+        new_zoom = min(MAX_ZOOM, max(MIN_ZOOM, zoom * factor))
+        if new_zoom == zoom: return
+        
         new_view_w = new_view_h = 1.0 / new_zoom
-        self.center_nx = cursor_nx - (real_x / self._canvas_w - 0.5) * new_view_w
-        self.center_ny = cursor_ny - (real_y / self._canvas_h - 0.5) * new_view_h
-        self._redraw(resample=Image.Resampling.BILINEAR)
-        self._schedule_hq_redraw()
+        new_center_nx = cursor_nx - (real_x / c_w - 0.5) * new_view_w
+        new_center_ny = cursor_ny - (real_y / c_h - 0.5) * new_view_h
+        
+        if is_ingame:
+            self.ig_zoom = new_zoom
+            self.ig_center_nx = new_center_nx
+            self.ig_center_ny = new_center_ny
+            self._redraw_ingame(resample=Image.Resampling.BILINEAR)
+            self._schedule_hq_redraw_ingame()
+        else:
+            self.m_zoom = new_zoom
+            self.m_center_nx = new_center_nx
+            self.m_center_ny = new_center_ny
+            self._redraw_menu(resample=Image.Resampling.BILINEAR)
+            self._schedule_hq_redraw_menu()
 
-    def _on_pan_start(self, event) -> None:
-        for key, (x1, y1, x2, y2) in self._zone_toggle_hitboxes.items():
+    def _on_pan_start(self, event, is_ingame=False) -> None:
+        hitboxes = self._ig_zone_toggle_hitboxes if is_ingame else self._m_zone_toggle_hitboxes
+        for key, (x1, y1, x2, y2) in hitboxes.items():
             if x1 <= event.x <= x2 and y1 <= event.y <= y2:
                 self._zone_visible[key] = not self._zone_visible[key]
                 self._redraw()
                 return
         if not self.source_image: return
-        self._pan_last = (event.x, event.y)
+        if is_ingame: self._ig_pan_last = (event.x, event.y)
+        else: self._m_pan_last = (event.x, event.y)
 
-    def _on_pan_move(self, event) -> None:
-        if not self.source_image or self._pan_last is None or self._view is None: return
-        last_x, last_y = self._pan_last
+    def _on_pan_move(self, event, is_ingame=False) -> None:
+        if not self.source_image: return
+        pan_last = self._ig_pan_last if is_ingame else self._m_pan_last
+        view = self.ig_view if is_ingame else self.m_view
+        
+        if pan_last is None or view is None: return
+        last_x, last_y = pan_last
         dx, dy = event.x - last_x, event.y - last_y
-        self._pan_last = (event.x, event.y)
-        _view_left, _view_top, view_w, view_h = self._view
-        self.center_nx -= (dx / self._canvas_w) * view_w
-        self.center_ny -= (dy / self._canvas_h) * view_h
-        self._redraw(resample=Image.Resampling.BILINEAR)
-        self._schedule_hq_redraw()
+        
+        if is_ingame:
+            self._ig_pan_last = (event.x, event.y)
+            _vl, _vt, vw, vh = self.ig_view
+            self.ig_center_nx -= (dx / self.ig_canvas_w) * vw
+            self.ig_center_ny -= (dy / self.ig_canvas_h) * vh
+            self._redraw_ingame(resample=Image.Resampling.BILINEAR)
+            self._schedule_hq_redraw_ingame()
+        else:
+            self._m_pan_last = (event.x, event.y)
+            _vl, _vt, vw, vh = self.m_view
+            self.m_center_nx -= (dx / self.m_canvas_w) * vw
+            self.m_center_ny -= (dy / self.m_canvas_h) * vh
+            self._redraw_menu(resample=Image.Resampling.BILINEAR)
+            self._schedule_hq_redraw_menu()
 
-    def _on_pan_end(self, _event=None) -> None:
-        self._pan_last = None
+    def _on_pan_end(self, event, is_ingame=False) -> None:
+        if is_ingame: self._ig_pan_last = None
+        else: self._m_pan_last = None
 
-    def _on_reset_view(self, _event=None) -> None:
-        self._cancel_hq_job()
-        self.zoom = MIN_ZOOM
-        self.center_nx = 0.5
-        self.center_ny = 0.5
-        self._redraw()
+    def _on_reset_view(self, event, is_ingame=False) -> None:
+        if is_ingame:
+            if self._ig_pending_hq_job:
+                self.root.after_cancel(self._ig_pending_hq_job)
+                self._ig_pending_hq_job = None
+            self.ig_zoom = MIN_ZOOM
+            self.ig_center_nx = 0.5
+            self.ig_center_ny = 0.5
+            self._redraw_ingame()
+        else:
+            if self._m_pending_hq_job:
+                self.root.after_cancel(self._m_pending_hq_job)
+                self._m_pending_hq_job = None
+            self.m_zoom = MIN_ZOOM
+            self.m_center_nx = 0.5
+            self.m_center_ny = 0.5
+            self._redraw_menu()
 
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == islepilot.LOGIN_SUBPROCESS_FLAG:
