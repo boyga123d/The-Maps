@@ -42,7 +42,7 @@ YOUTUBE_URL = "https://www.youtube.com/@GlobalDailyHighlights"
 DISCORD_URL = "https://discord.gg/XpkRPpDhPU"
 APP_VERSION = "2.2"
 
-RELEASE_TAG = "v3"
+RELEASE_TAG = "2.2"
 GITHUB_RELEASE_API = "https://api.github.com/repos/boyga123d/The-Maps/releases/latest"
 GITHUB_RELEASE_PAGE = "https://github.com/boyga123d/The-Maps/releases/latest"
 UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -62,6 +62,7 @@ MAX_HISTORY_POINTS = 100
 ZONE_LAYERS: tuple[tuple[str, str, str, str], ...] = (
     ("migrations", "Migration", "zone_migration.png", "#ff9800"),
     ("patrol_zones", "Patrol", "zone_patrol.png", "#ab47bc"),
+    ("Ô Vuông", "Ô Vuông", "number.png", "#ab47bc"),
 )
 
 @dataclass(frozen=True)
