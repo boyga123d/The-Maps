@@ -62,7 +62,7 @@ MAX_HISTORY_POINTS = 100
 ZONE_LAYERS: tuple[tuple[str, str, str, str], ...] = (
     ("migrations", "Migration", "zone_migration.png", "#ff9800"),
     ("patrol_zones", "Patrol", "zone_patrol.png", "#ab47bc"),
-    ("Ô Vuông", "Ô Vuông", "number.png", "#1708ec"),
+    ("Ô Vuông", "Ô Vuông", "number.png", "#ab47bc"),
 )
 
 @dataclass(frozen=True)
@@ -200,7 +200,119 @@ MINI_MAP_SIZE = 220
 MINI_MAP_CROP_FRACTION = 0.16
 QUEST_PANEL_WIDTH = 260
 HUD_BG = "#10191d"
-VITAL_BAR_SPECS = (("health", "Máu", "#e74c3c"), ("stamina", "Stamina", "#f1c40f"), ("thirst", "Nước", "#3498db"), ("hunger", "Food", "#e67e22"))
+
+class VitalsPanel:
+    def __init__(self, root: tk.Tk, opacity: float = 1.0):
+        self.window = tk.Toplevel(root)
+        self.window.overrideredirect(True)
+        self.window.attributes("-topmost", True)
+        self.window.attributes("-alpha", opacity)
+        self.window.configure(bg=HUD_BG)
+        self.window.geometry(f"+{HUD_MARGIN}+{HUD_MARGIN + MINI_MAP_SIZE + 10}")
+        
+        self.is_movable = False
+        self._drag_start_x = 0
+        self._drag_start_y = 0
+        
+        self.main_frame = tk.Frame(self.window, bg=HUD_BG, highlightthickness=2, highlightbackground=HUD_BG)
+        self.main_frame.pack(fill="both", expand=True)
+
+        self.canvas = tk.Canvas(self.main_frame, width=220, height=115, background=HUD_BG, highlightthickness=0)
+        self.canvas.pack(padx=2, pady=5)
+        
+        self._bind_drag(self.main_frame)
+        self._bind_drag(self.canvas)
+        
+        self.window.update_idletasks()
+        self._set_clickthrough(True)
+        self.hide()
+
+    def _set_clickthrough(self, clickthrough: bool) -> None:
+        try:
+            self.window.update_idletasks()
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetParent(self.window.winfo_id())
+            if not hwnd: 
+                hwnd = self.window.winfo_id()
+                
+            style = user32.GetWindowLongW(hwnd, -20)
+            WS_EX_TRANSPARENT = 0x00000020
+            WS_EX_LAYERED = 0x00080000
+            WS_EX_NOACTIVATE = 0x08000000
+            
+            if clickthrough:
+                style |= (WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE)
+            else:
+                style &= ~WS_EX_TRANSPARENT
+                style |= (WS_EX_LAYERED | WS_EX_NOACTIVATE)
+                
+            user32.SetWindowLongW(hwnd, -20, style)
+        except Exception: pass
+
+    def _bind_drag(self, widget: tk.Widget) -> None:
+        widget.bind("<ButtonPress-1>", self._on_drag_start)
+        widget.bind("<B1-Motion>", self._on_drag_motion)
+
+    def set_opacity(self, alpha: float) -> None:
+        self.window.attributes("-alpha", alpha)
+        
+    def toggle_move_mode(self) -> None:
+        self.is_movable = not self.is_movable
+        if self.is_movable:
+            self.main_frame.configure(highlightbackground="#e74c3c", highlightcolor="#e74c3c")
+            self._set_clickthrough(False)
+        else:
+            self.main_frame.configure(highlightbackground=HUD_BG, highlightcolor=HUD_BG)
+            self._set_clickthrough(True)
+
+    def _on_drag_start(self, event) -> None:
+        if self.is_movable:
+            self._drag_start_x = event.x_root - self.window.winfo_x()
+            self._drag_start_y = event.y_root - self.window.winfo_y()
+
+    def _on_drag_motion(self, event) -> None:
+        if self.is_movable:
+            x = event.x_root - self._drag_start_x
+            y = event.y_root - self._drag_start_y
+            self.window.geometry(f"+{x}+{y}")
+
+    def show(self) -> None: self.window.deiconify()
+    def hide(self) -> None: self.window.withdraw()
+    
+    def update(self, status: "islepilot.IslePilotStatus") -> None:
+        self.canvas.delete("all")
+        
+        raw_growth = getattr(status, 'growth', 0)
+        growth_val = raw_growth * 100 if raw_growth <= 1.0 else raw_growth
+
+        values = [
+            ("Máu", getattr(status, 'health', 0), getattr(status, 'max_health', 1), "#e74c3c"),
+            ("Stamina", getattr(status, 'stamina', 0), getattr(status, 'max_stamina', 1), "#f1c40f"),
+            ("Nước", getattr(status, 'thirst', 0), getattr(status, 'max_thirst', 1), "#3498db"),
+            ("Thức ăn", getattr(status, 'hunger', 0), getattr(status, 'max_hunger', 1), "#e67e22"),
+            ("Phát triển", growth_val, 100, "#0cee2a")
+        ]
+        
+        y = 3
+        for label, current, maximum, color in values:
+            self.canvas.create_text(55, y+8, text=label, fill="#cfd8dc", font=("Segoe UI", 8, "bold"), anchor="e")
+            bar_start_x = 65
+            bar_width = 150
+            bar_height = 16
+            self.canvas.create_rectangle(bar_start_x, y, bar_start_x + bar_width, y + bar_height, fill="#26343a", outline="")
+            
+            if current is not None and maximum:
+                fraction = max(0.0, min(1.0, current / maximum))
+                if fraction > 0:
+                    self.canvas.create_rectangle(bar_start_x, y, bar_start_x + (bar_width * fraction), y + bar_height, fill=color, outline="")
+                
+                text_val = f"{_format_stat(current)} / {_format_stat(maximum)}"
+                self.canvas.create_text(bar_start_x + (bar_width // 2), y + 8, text=text_val, fill="#ffffff", font=("Segoe UI", 8, "bold"))
+            else:
+                self.canvas.create_text(bar_start_x + (bar_width // 2), y + 8, text="--", fill="#90a4ae", font=("Segoe UI", 8))
+            y += 22
+
+    def destroy(self) -> None: self.window.destroy()
 
 class MiniMapPanel:
     def __init__(self, root: tk.Tk, opacity: float = 1.0):
@@ -208,7 +320,10 @@ class MiniMapPanel:
         self.window.overrideredirect(True)
         self.window.attributes("-topmost", True)
         self.window.attributes("-alpha", opacity)
-        self.window.configure(bg=HUD_BG)
+        
+        self.window.attributes("-transparentcolor", "#000001")
+        self.window.configure(bg="#000001")
+        
         self.window.geometry(f"+{HUD_MARGIN}+{HUD_MARGIN}")
         
         self.is_movable = False
@@ -216,55 +331,33 @@ class MiniMapPanel:
         self._drag_start_y = 0
         self.shape = "Vuông"
         
-        self.canvas = tk.Canvas(self.window, width=MINI_MAP_SIZE, height=MINI_MAP_SIZE, background="#1b262c", highlightthickness=2, highlightbackground="#37474f")
+        self.canvas = tk.Canvas(self.window, width=MINI_MAP_SIZE, height=MINI_MAP_SIZE, background="#000001", highlightthickness=0, borderwidth=0)
         self.canvas.pack()
         
         self.canvas.bind("<ButtonPress-1>", self._on_drag_start)
         self.canvas.bind("<B1-Motion>", self._on_drag_motion)
         
-        bars_frame = tk.Frame(self.window, bg=HUD_BG)
-        bars_frame.pack(fill="x", pady=(6, 4), padx=2)
-        self._bar_canvases, self._bar_labels = {}, {}
-        for key, label, color in VITAL_BAR_SPECS:
-            row = tk.Frame(bars_frame, bg=HUD_BG)
-            row.pack(fill="x", pady=1)
-            tk.Label(row, text=label, fg="#cfd8dc", bg=HUD_BG, font=("Segoe UI", 8), width=7, anchor="w").pack(side="left")
-            bar_canvas = tk.Canvas(row, width=120, height=14, background="#26343a", highlightthickness=0)
-            bar_canvas.pack(side="left", padx=(4, 4))
-            
-            bar_canvas.bind("<ButtonPress-1>", self._on_drag_start)
-            bar_canvas.bind("<B1-Motion>", self._on_drag_motion)
-            
-            value_label = tk.Label(row, text="--", fg="#90a4ae", bg=HUD_BG, font=("Segoe UI", 8))
-            value_label.pack(side="left")
-            self._bar_canvases[key] = bar_canvas
-            self._bar_labels[key] = value_label
-            
         self._photo = None
         self.window.update_idletasks()
         self._set_clickthrough(True)
         self.hide()
 
     def _set_clickthrough(self, clickthrough: bool) -> None:
-        """Hàm thiết lập chế độ Click-through chuẩn Windows API (Xuyên chuột hoàn toàn)"""
         try:
             self.window.update_idletasks()
             user32 = ctypes.windll.user32
-            # Lấy Handle chuẩn xác của cửa sổ Tkinter trên Windows
             hwnd = user32.GetParent(self.window.winfo_id())
             if not hwnd: 
                 hwnd = self.window.winfo_id()
                 
-            style = user32.GetWindowLongW(hwnd, -20) # GWL_EXSTYLE
+            style = user32.GetWindowLongW(hwnd, -20)
             WS_EX_TRANSPARENT = 0x00000020
             WS_EX_LAYERED = 0x00080000
             WS_EX_NOACTIVATE = 0x08000000
             
             if clickthrough:
-                # Bật chế độ xuyên chuột (Transparent + Layered)
                 style |= (WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE)
             else:
-                # Tắt xuyên chuột để có thể kéo thả
                 style &= ~WS_EX_TRANSPARENT
                 style |= (WS_EX_LAYERED | WS_EX_NOACTIVATE)
                 
@@ -279,13 +372,13 @@ class MiniMapPanel:
         if self.is_movable:
             self._set_clickthrough(False)
             if self.shape == "Vuông":
-                self.canvas.configure(highlightbackground="#e74c3c", highlightcolor="#e74c3c")
+                self.canvas.configure(highlightthickness=2, highlightbackground="#e74c3c")
             else:
                 self.canvas.itemconfig("border_oval", outline="#e74c3c")
         else:
             self._set_clickthrough(True)
             if self.shape == "Vuông":
-                self.canvas.configure(highlightbackground="#37474f", highlightcolor="#37474f")
+                self.canvas.configure(highlightthickness=2, highlightbackground="#37474f")
             else:
                 self.canvas.itemconfig("border_oval", outline="#37474f")
 
@@ -309,7 +402,7 @@ class MiniMapPanel:
         if source_image is None: return
         
         if shape == "Tròn":
-            self.canvas.configure(highlightthickness=0, bg=HUD_BG)
+            self.canvas.configure(highlightthickness=0, bg="#000001")
         else:
             border_color = "#e74c3c" if self.is_movable else "#37474f"
             self.canvas.configure(highlightthickness=2, highlightbackground=border_color, bg="#1b262c")
@@ -324,6 +417,12 @@ class MiniMapPanel:
         for zone_image in zone_images: cropped.alpha_composite(zone_image.crop(crop_box))
         resized = cropped.resize((MINI_MAP_SIZE, MINI_MAP_SIZE), Image.Resampling.LANCZOS)
         
+        if shape == "Tròn":
+            mask = Image.new("L", (MINI_MAP_SIZE, MINI_MAP_SIZE), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, MINI_MAP_SIZE, MINI_MAP_SIZE), fill=255)
+            bg_img = Image.new("RGBA", (MINI_MAP_SIZE, MINI_MAP_SIZE), "#000001")
+            resized = Image.composite(resized, bg_img, mask)
+
         self._photo = ImageTk.PhotoImage(resized)
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
         
@@ -351,32 +450,12 @@ class MiniMapPanel:
                     _draw_text_with_outline(self.canvas, rx + TEXT_OFFSET_X, ry + TEXT_OFFSET_Y, name, max(8, size - 3), color)
 
         if shape == "Tròn":
-            if not hasattr(self, '_corner_cover'):
-                cover = Image.new("RGBA", (MINI_MAP_SIZE, MINI_MAP_SIZE), HUD_BG)
-                mask = Image.new("L", (MINI_MAP_SIZE, MINI_MAP_SIZE), 255)
-                ImageDraw.Draw(mask).ellipse((0, 0, MINI_MAP_SIZE, MINI_MAP_SIZE), fill=0)
-                cover.putalpha(mask)
-                self._corner_cover = ImageTk.PhotoImage(cover)
-            self.canvas.create_image(0, 0, anchor="nw", image=self._corner_cover)
             border_color = "#e74c3c" if self.is_movable else "#37474f"
             self.canvas.create_oval(2, 2, MINI_MAP_SIZE-2, MINI_MAP_SIZE-2, outline=border_color, width=2, tags="border_oval")
 
         marker_x = max(0.0, min(float(MINI_MAP_SIZE), (nx - left) / frac * MINI_MAP_SIZE))
         marker_y = max(0.0, min(float(MINI_MAP_SIZE), (ny - top) / frac * MINI_MAP_SIZE))
         _draw_heading_polygon(self.canvas, marker_x, marker_y, heading_deg, 11, "#ff5b45")
-
-    def update_vitals(self, status: "islepilot.IslePilotStatus") -> None:
-        values = {"health": (status.health, status.max_health), "stamina": (status.stamina, status.max_stamina), "thirst": (status.thirst, status.max_thirst), "hunger": (status.hunger, status.max_hunger)}
-        for key, _label, color in VITAL_BAR_SPECS:
-            canvas = self._bar_canvases[key]
-            canvas.delete("all")
-            canvas.create_rectangle(0, 0, 120, 14, fill="#26343a", outline="")
-            current, maximum = values[key]
-            if current is not None and maximum:
-                fraction = max(0.0, min(1.0, current / maximum))
-                if fraction > 0: canvas.create_rectangle(0, 0, 120 * fraction, 14, fill=color, outline="")
-                self._bar_labels[key].configure(text=f"{_format_stat(current)}/{_format_stat(maximum)}")
-            else: self._bar_labels[key].configure(text="--")
 
     def destroy(self) -> None: self.window.destroy()
 
@@ -487,25 +566,41 @@ class QuestPanel:
 class IslePilotHud:
     def __init__(self, root: tk.Tk, opacity: float = 1.0):
         self.minimap = MiniMapPanel(root, opacity)
+        self.vitals = VitalsPanel(root, opacity)
         self.quests = QuestPanel(root, opacity)
         
     def toggle_move_mode(self) -> None:
         self.minimap.toggle_move_mode()
+        self.vitals.toggle_move_mode()
         self.quests.toggle_move_mode()
         
-    def show(self, show_quests: bool = True) -> None:
-        self.minimap.show()
+    def show(self, show_minimap: bool = True, show_vitals: bool = True, show_quests: bool = True) -> None:
+        if show_minimap: self.minimap.show()
+        else: self.minimap.hide()
+
+        if show_vitals: self.vitals.show()
+        else: self.vitals.hide()
+
         if show_quests: self.quests.show()
         else: self.quests.hide()
+        
     def hide(self) -> None:
         self.minimap.hide()
+        self.vitals.hide()
         self.quests.hide()
+        
     def update_map(self, source_image, profile: MapProfile, x: float, y: float, heading_deg: float, zone_images: tuple["Image.Image", ...] = (), path_history: list[Position] = None, show_regions: bool = False, shape: str = "Vuông") -> None:
         self.minimap.update_map(source_image, profile, x, y, heading_deg, zone_images=zone_images, path_history=path_history, show_regions=show_regions, shape=shape)
-    def update_vitals(self, status: "islepilot.IslePilotStatus") -> None: self.minimap.update_vitals(status)
-    def update_quests(self, status: "islepilot.IslePilotStatus") -> None: self.quests.update(status)
+        
+    def update_vitals(self, status: "islepilot.IslePilotStatus") -> None: 
+        self.vitals.update(status)
+        
+    def update_quests(self, status: "islepilot.IslePilotStatus") -> None: 
+        self.quests.update(status)
+        
     def destroy(self) -> None:
         self.minimap.destroy()
+        self.vitals.destroy()
         self.quests.destroy()
 
 FOREGROUND_POLL_MS = 300
@@ -529,6 +624,11 @@ class MapApp:
         self.minimap_shape = "Vuông"
         self.show_regions_var = ctk.BooleanVar(value=True)
         
+        # Biến trạng thái bật tắt HUD
+        self.show_minimap_var = ctk.BooleanVar(value=True)
+        self.show_vitals_var = ctk.BooleanVar(value=True)
+        self.show_quests_var = ctk.BooleanVar(value=True)
+        
         self.profiles = load_profiles()
         self.profile = self._load_app_config()
         self.shape_var = ctk.StringVar(value=self.minimap_shape)
@@ -538,8 +638,6 @@ class MapApp:
 
         self.last_clipboard = ""
         self.source_image: Image.Image | None = None
-        self.map_image: ImageTk.PhotoImage | None = None
-        self.rendered_size: tuple[int, int] | None = None
         self.tray_icon: pystray.Icon | None = None
         
         self.global_escape = threading.Event()
@@ -601,7 +699,7 @@ class MapApp:
 
         self.root.title(f"The-Maps v{APP_VERSION}")
         if APP_ICON_ICO.exists(): self.root.iconbitmap(default=str(APP_ICON_ICO))
-        self.root.geometry("400x720")
+        self.root.geometry("400x760")
         self.root.resizable(False, False)
         self.root.attributes("-topmost", True)
         self.root.protocol("WM_DELETE_WINDOW", self._exit)
@@ -672,6 +770,10 @@ class MapApp:
                 self.minimap_opacity = data.get("minimap_opacity", 1.0)
                 self.show_regions_var.set(data.get("show_regions", True))
                 self.minimap_shape = data.get("minimap_shape", "Vuông")
+                
+                self.show_minimap_var.set(data.get("show_minimap", True))
+                self.show_vitals_var.set(data.get("show_vitals", True))
+                self.show_quests_var.set(data.get("show_quests", True))
             except (json.JSONDecodeError, OSError): pass
         return next((p for p in self.profiles if p.profile_id == selected_map), self.profiles[0])
 
@@ -684,7 +786,10 @@ class MapApp:
             "ingame_hotkey": self.ingame_hotkey_name,
             "minimap_opacity": self.minimap_opacity,
             "show_regions": self.show_regions_var.get(),
-            "minimap_shape": self.shape_var.get()
+            "minimap_shape": self.shape_var.get(),
+            "show_minimap": self.show_minimap_var.get(),
+            "show_vitals": self.show_vitals_var.get(),
+            "show_quests": self.show_quests_var.get()
         }, indent=2), encoding="utf-8")
 
     def _build_ui(self) -> None:
@@ -736,8 +841,16 @@ class MapApp:
         self.shape_seg = ctk.CTkSegmentedButton(shape_frame, values=["Vuông", "Tròn"], variable=self.shape_var, command=self._on_shape_change)
         self.shape_seg.pack(side="right")
 
-        self.chk_regions = ctk.CTkCheckBox(self.control_frame, text="Hiển thị Tên Khu Vực", variable=self.show_regions_var, command=self._on_region_toggle)
-        self.chk_regions.pack(anchor="w", padx=20, pady=(5, 10))
+        # TÙY CHỌN BẬT / TẮT HUD
+        hud_opts_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
+        hud_opts_frame.pack(fill="x", padx=20, pady=(5, 5))
+        hud_opts_frame.grid_columnconfigure(0, weight=1)
+        hud_opts_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkCheckBox(hud_opts_frame, text="Hiện MiniMap", variable=self.show_minimap_var, command=self._on_hud_toggle).grid(row=0, column=0, sticky="w", pady=5)
+        ctk.CTkCheckBox(hud_opts_frame, text="Hiện Chỉ số", variable=self.show_vitals_var, command=self._on_hud_toggle).grid(row=0, column=1, sticky="w", pady=5)
+        ctk.CTkCheckBox(hud_opts_frame, text="Hiện Nhiệm vụ", variable=self.show_quests_var, command=self._on_hud_toggle).grid(row=1, column=0, sticky="w", pady=5)
+        ctk.CTkCheckBox(hud_opts_frame, text="Tên Khu Vực", variable=self.show_regions_var, command=self._on_region_toggle).grid(row=1, column=1, sticky="w", pady=5)
 
         ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=5)
 
@@ -844,6 +957,7 @@ class MapApp:
         self.minimap_opacity = value
         if self._hud:
             self._hud.minimap.set_opacity(value)
+            self._hud.vitals.set_opacity(value)
             self._hud.quests.set_opacity(value)
         self._save_app_config()
 
@@ -862,6 +976,11 @@ class MapApp:
     def _on_region_toggle(self) -> None:
         self._save_app_config()
         self._redraw()
+
+    def _on_hud_toggle(self) -> None:
+        self._save_app_config()
+        if self._hud is not None:
+            self._poll_hud_visibility()
 
     def _on_connect_click(self):
         if self._islepilot_connected():
@@ -904,12 +1023,12 @@ class MapApp:
         hk_text = self.current_hotkey_name
         if self.map_visible:
             self.map_frame.pack_forget()
-            self.root.geometry("400x720")
+            self.root.geometry("400x760")
             self.root.resizable(False, False)
             self.btn_toggle_map.configure(text=f"MỞ BẢN ĐỒ (Phím {hk_text})", fg_color=["#3a7ebf", "#1f538d"], hover_color=["#325882", "#14375e"])
             self.map_visible = False
         else:
-            self.root.geometry("1100x720")
+            self.root.geometry("1100x760")
             self.root.resizable(True, True) 
             self.map_frame.pack(side="right", fill="both", expand=True, padx=(5, 0))
             self.btn_toggle_map.configure(text=f"ẨN BẢN ĐỒ (Phím {hk_text})", fg_color="#c0392b", hover_color="#922b21")
@@ -1091,7 +1210,7 @@ class MapApp:
         
         if self._hud is None: self._hud = IslePilotHud(self.root, opacity=self.minimap_opacity)
         self._hud.update_map(self.source_image, self.profile, position.x, position.y, self._local_heading_deg, zone_images=self._active_zone_images(), path_history=self.path_history, show_regions=self.show_regions_var.get(), shape=self.minimap_shape)
-        self._redraw()
+        if self.map_visible or getattr(self, 'ingame_map_visible', False): self._redraw()
 
     def _islepilot_status_text(self) -> str:
         if self._islepilot_steam_id:
@@ -1175,7 +1294,7 @@ class MapApp:
                 self.current = position
                 position_changed = True
                 
-        if position_changed or heading_changed: 
+        if (position_changed or heading_changed) and (self.map_visible or getattr(self, 'ingame_map_visible', False)): 
             self._redraw()
             
         draw_position = position or self.current
@@ -1187,8 +1306,13 @@ class MapApp:
         if self._hud is not None:
             local_live = self._local_position_fresh()
             has_live_source = local_live or self._islepilot_online
-            if has_live_source and islepilot.is_game_foreground(): self._hud.show(show_quests=self._islepilot_online)
-            else: self._hud.hide()
+            if has_live_source and islepilot.is_game_foreground():
+                show_mm = self.show_minimap_var.get()
+                show_vi = self.show_vitals_var.get()
+                show_qu = self.show_quests_var.get() and self._islepilot_online
+                self._hud.show(show_minimap=show_mm, show_vitals=show_vi, show_quests=show_qu)
+            else: 
+                self._hud.hide()
         self.root.after(FOREGROUND_POLL_MS, self._poll_hud_visibility)
 
     def _check_for_update(self) -> None:
@@ -1262,9 +1386,17 @@ class MapApp:
             self._local_heading_deg = None
         self._show_map()
 
+    def _clamp_view(self) -> None:
+        view_w = view_h = 1.0 / self.zoom
+        max_left, max_top = max(0.0, 1.0 - view_w), max(0.0, 1.0 - view_h)
+        left = min(max(self.center_nx - view_w / 2, 0.0), max_left)
+        top = min(max(self.center_ny - view_h / 2, 0.0), max_top)
+        self.center_nx, self.center_ny = left + view_w / 2, top + view_h / 2
+        self._view = (left, top, view_w, view_h)
+
     def _redraw(self):
         if self.map_visible: self._redraw_menu()
-        if self.ingame_map_visible: self._redraw_ingame()
+        if getattr(self, 'ingame_map_visible', False): self._redraw_ingame()
 
     def _redraw_menu(self, resample: int | None = None) -> None:
         if not self.map_visible: return
