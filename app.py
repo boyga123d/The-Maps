@@ -62,7 +62,8 @@ MAX_HISTORY_POINTS = 100
 ZONE_LAYERS: tuple[tuple[str, str, str, str], ...] = (
     ("migrations", "Migration", "zone_migration.png", "#ff9800"),
     ("patrol_zones", "Patrol", "zone_patrol.png", "#ab47bc"),
-    ("Ô Vuông", "Ô Vuông", "number.png", "#ab47bc"),
+    ("400OV", "400 Ô", "number.png", "#1674f0"),
+    ("600OV", "600 Ô", "number2.png", "#eef106"),
 )
 
 @dataclass(frozen=True)
@@ -675,7 +676,7 @@ class MapApp:
         self.ig_rendered_size: tuple[int, int] | None = None
 
         self._zone_images: dict[str, Image.Image] = {}
-        self._zone_visible: dict[str, bool] = {key: True for key, _label, _filename, _color in ZONE_LAYERS}
+        self._zone_visible: dict[str, bool] = {key: (False if key == "400OV" or key == "600OV" else True) for key, _label, _filename, _color in ZONE_LAYERS}
         self._m_zone_toggle_hitboxes: dict[str, tuple[float, float, float, float]] = {}
         self._ig_zone_toggle_hitboxes: dict[str, tuple[float, float, float, float]] = {}
 
