@@ -11,6 +11,7 @@ import time
 import traceback
 import tkinter as tk
 import webbrowser
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -23,6 +24,11 @@ import customtkinter as ctk
 
 import islepilot
 import localtelemetry
+
+# ========================================================
+# CẤU HÌNH API ĐỒNG ĐỘI (PARTY) TRỰC TIẾP TRONG CODE
+# ========================================================
+API_URL = "http://ABCXYZ:8000/sync"
 
 # --- CẤU HÌNH GIAO DIỆN ---
 ctk.set_appearance_mode("dark")
@@ -40,9 +46,9 @@ APP_ICON_ICO = RESOURCE_ROOT / "assets" / "the_maps.ico"
 APP_ICON_PNG = RESOURCE_ROOT / "assets" / "the_maps.png"
 YOUTUBE_URL = "https://www.youtube.com/@GlobalDailyHighlights"
 DISCORD_URL = "https://discord.gg/XpkRPpDhPU"
-APP_VERSION = "2.2"
+APP_VERSION = "2.3"
 
-RELEASE_TAG = "2.2"
+RELEASE_TAG = "2.3"
 GITHUB_RELEASE_API = "https://api.github.com/repos/boyga123d/The-Maps/releases/latest"
 GITHUB_RELEASE_PAGE = "https://github.com/boyga123d/The-Maps/releases/latest"
 UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -72,15 +78,9 @@ class Position:
     y: float
     z: float
 
-# ========================================================
-# BIẾN TINH CHỈNH TỌA ĐỘ PIXEL GIAO DIỆN
-# ========================================================
 TEXT_OFFSET_X = 0
 TEXT_OFFSET_Y = 0
 
-# ========================================================
-# TỌA ĐỘ VÙNG CÓ TÊN (ĐÃ BÙ TRỪ X-76000, Y-54000)
-# ========================================================
 MAP_LABELS = [
     ("Delta", Position(70411.0, 206414.0, 0.0), "#f1c40f", 10),
     ("East\nCoast", Position(-142334.0, 680270.0, 0.0), "#f1c40f", 10),
@@ -397,7 +397,7 @@ class MiniMapPanel:
     def show(self) -> None: self.window.deiconify()
     def hide(self) -> None: self.window.withdraw()
     
-    def update_map(self, source_image, profile: MapProfile, x: float, y: float, heading_deg: float, zone_images: tuple["Image.Image", ...] = (), path_history: list[Position] = None, show_regions: bool = False, shape: str = "Vuông") -> None:
+    def update_map(self, source_image, profile: MapProfile, x: float, y: float, heading_deg: float, zone_images: tuple["Image.Image", ...] = (), path_history: list[Position] = None, show_regions: bool = False, shape: str = "Vuông", teammates: dict = None) -> None:
         self.shape = shape
         self.canvas.delete("all")
         if source_image is None: return
@@ -453,6 +453,20 @@ class MiniMapPanel:
         if shape == "Tròn":
             border_color = "#e74c3c" if self.is_movable else "#37474f"
             self.canvas.create_oval(2, 2, MINI_MAP_SIZE-2, MINI_MAP_SIZE-2, outline=border_color, width=2, tags="border_oval")
+
+        # Vẽ đồng đội trên Minimap
+        if teammates:
+            try:
+                for tid, tdata in teammates.items():
+                    tpos = tdata["pos"]
+                    tyaw = tdata["yaw"]
+                    tnx, tny = profile.to_normalized(tpos)
+                    hx = (tnx - left) / frac * MINI_MAP_SIZE
+                    hy = (tny - top) / frac * MINI_MAP_SIZE
+                    _draw_heading_polygon(self.canvas, hx, hy, tyaw, 11, "#2ecc71")
+                    self.canvas.create_oval(hx - 4, hy - 4, hx + 4, hy + 4, fill="#27ae60", outline="white", width=1)
+            except Exception:
+                pass
 
         marker_x = max(0.0, min(float(MINI_MAP_SIZE), (nx - left) / frac * MINI_MAP_SIZE))
         marker_y = max(0.0, min(float(MINI_MAP_SIZE), (ny - top) / frac * MINI_MAP_SIZE))
@@ -590,8 +604,8 @@ class IslePilotHud:
         self.vitals.hide()
         self.quests.hide()
         
-    def update_map(self, source_image, profile: MapProfile, x: float, y: float, heading_deg: float, zone_images: tuple["Image.Image", ...] = (), path_history: list[Position] = None, show_regions: bool = False, shape: str = "Vuông") -> None:
-        self.minimap.update_map(source_image, profile, x, y, heading_deg, zone_images=zone_images, path_history=path_history, show_regions=show_regions, shape=shape)
+    def update_map(self, source_image, profile: MapProfile, x: float, y: float, heading_deg: float, zone_images: tuple["Image.Image", ...] = (), path_history: list[Position] = None, show_regions: bool = False, shape: str = "Vuông", teammates: dict = None) -> None:
+        self.minimap.update_map(source_image, profile, x, y, heading_deg, zone_images=zone_images, path_history=path_history, show_regions=show_regions, shape=shape, teammates=teammates)
         
     def update_vitals(self, status: "islepilot.IslePilotStatus") -> None: 
         self.vitals.update(status)
@@ -625,7 +639,6 @@ class MapApp:
         self.minimap_shape = "Vuông"
         self.show_regions_var = ctk.BooleanVar(value=True)
         
-        # Biến trạng thái bật tắt HUD
         self.show_minimap_var = ctk.BooleanVar(value=True)
         self.show_vitals_var = ctk.BooleanVar(value=True)
         self.show_quests_var = ctk.BooleanVar(value=True)
@@ -645,7 +658,13 @@ class MapApp:
         self.ingame_escape = threading.Event()
         self.last_clipboard_sequence = ctypes.windll.user32.GetClipboardSequenceNumber()
 
-        # STATE CHO MENU MAP
+        # Biến cho tính năng Party
+        self.party_code_var = ctk.StringVar(value="")
+        self.party_pw_var = ctk.StringVar(value="")
+        self.player_id = str(uuid.uuid4())[:4].upper()
+        self.teammates = {}
+        self.is_party_active = False
+
         self.m_zoom = MIN_ZOOM
         self.m_center_nx = 0.5
         self.m_center_ny = 0.5
@@ -660,7 +679,6 @@ class MapApp:
         self.m_map_image: ImageTk.PhotoImage | None = None
         self.m_rendered_size: tuple[int, int] | None = None
 
-        # STATE CHO INGAME MAP
         self.ig_zoom = MIN_ZOOM
         self.ig_center_nx = 0.5
         self.ig_center_ny = 0.5
@@ -700,12 +718,11 @@ class MapApp:
 
         self.root.title(f"The-Maps v{APP_VERSION}")
         if APP_ICON_ICO.exists(): self.root.iconbitmap(default=str(APP_ICON_ICO))
-        self.root.geometry("400x760")
+        self.root.geometry("400x820")
         self.root.resizable(False, False)
         self.root.attributes("-topmost", True)
         self.root.protocol("WM_DELETE_WINDOW", self._exit)
 
-        # KHỞI TẠO CỬA SỔ INGAME MAP OVERLAY
         self.ingame_map_window = tk.Toplevel(self.root)
         self.ingame_map_window.overrideredirect(True)
         self.ingame_map_window.attributes("-topmost", True)
@@ -842,7 +859,6 @@ class MapApp:
         self.shape_seg = ctk.CTkSegmentedButton(shape_frame, values=["Vuông", "Tròn"], variable=self.shape_var, command=self._on_shape_change)
         self.shape_seg.pack(side="right")
 
-        # TÙY CHỌN BẬT / TẮT HUD
         hud_opts_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
         hud_opts_frame.pack(fill="x", padx=20, pady=(5, 5))
         hud_opts_frame.grid_columnconfigure(0, weight=1)
@@ -852,6 +868,22 @@ class MapApp:
         ctk.CTkCheckBox(hud_opts_frame, text="Hiện Chỉ số", variable=self.show_vitals_var, command=self._on_hud_toggle).grid(row=0, column=1, sticky="w", pady=5)
         ctk.CTkCheckBox(hud_opts_frame, text="Hiện Nhiệm vụ", variable=self.show_quests_var, command=self._on_hud_toggle).grid(row=1, column=0, sticky="w", pady=5)
         ctk.CTkCheckBox(hud_opts_frame, text="Tên Khu Vực", variable=self.show_regions_var, command=self._on_region_toggle).grid(row=1, column=1, sticky="w", pady=5)
+
+        # --- TÍNH NĂNG ĐỒNG ĐỘI (PARTY CODE) ---
+        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(self.control_frame, text="Mã Code Đồng Đội & Mật Khẩu:").pack(anchor="w", padx=20)
+        
+        party_row = ctk.CTkFrame(self.control_frame, fg_color="transparent")
+        party_row.pack(fill="x", padx=20, pady=(0, 10))
+        
+        self.entry_party = ctk.CTkEntry(party_row, textvariable=self.party_code_var, width=120, placeholder_text="Mã phòng...")
+        self.entry_party.pack(side="left", padx=(0, 5))
+        
+        self.entry_party_pw = ctk.CTkEntry(party_row, textvariable=self.party_pw_var, width=100, placeholder_text="Mật khẩu", show="*")
+        self.entry_party_pw.pack(side="left", padx=(0, 10))
+        
+        self.btn_party = ctk.CTkButton(party_row, text="Kết nối", width=70, command=self._toggle_party)
+        self.btn_party.pack(side="left")
 
         ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=5)
 
@@ -919,6 +951,72 @@ class MapApp:
         self.ingame_canvas.bind("<Double-Button-1>", lambda e: self._on_reset_view(e, True))
         
         self._update_statuses()
+
+    def _reset_party_ui(self, show_error=None):
+        self.is_party_active = False
+        self.btn_party.configure(text="Kết nối", fg_color=["#3a7ebf", "#1f538d"], hover_color=["#325882", "#14375e"])
+        self.entry_party.configure(state="normal")
+        self.entry_party_pw.configure(state="normal")
+        self.teammates.clear()
+        self._redraw()
+        if show_error:
+            messagebox.showerror("The-Maps", show_error)
+
+    def _toggle_party(self):
+        if self.is_party_active:
+            self._reset_party_ui()
+        else:
+            code = self.party_code_var.get().strip()
+            if not code:
+                messagebox.showwarning("The-Maps", "Vui lòng nhập mã phòng!")
+                return
+            self.is_party_active = True
+            self.btn_party.configure(text="Ngắt", fg_color="#c0392b", hover_color="#922b21")
+            self.entry_party.configure(state="disabled")
+            self.entry_party_pw.configure(state="disabled")
+            threading.Thread(target=self._party_sync_loop, daemon=True).start()
+
+    def _party_sync_loop(self):
+        empty_room_counter = 0
+        while self.is_party_active:
+            game_x = self.current.y if self.current else 999999.0
+            game_y = self.current.x if self.current else 999999.0
+            yaw = self._current_heading_degrees() or 0.0 if self.current else 0.0
+
+            payload = {
+                "room_code": self.party_code_var.get().strip(),
+                "password": self.party_pw_var.get().strip(),
+                "player_id": self.player_id,
+                "x": game_x,
+                "y": game_y,
+                "yaw": yaw
+            }
+            
+            try:
+                resp = requests.post(API_URL, json=payload, timeout=3)
+                if resp.status_code == 200:
+                    data = resp.json().get("teammates", [])
+                    
+                    valid_teammates = {}
+                    for t in data:
+                        if t["x"] != 999999.0 and t["y"] != 999999.0:
+                            valid_teammates[t["id"]] = {"pos": Position(t["y"], t["x"], 0.0), "yaw": t["yaw"]}
+                    
+                    self.teammates = valid_teammates
+                    self.root.after(0, self._redraw)
+
+                    if not valid_teammates:
+                        empty_room_counter += 1
+                    else:
+                        empty_room_counter = 0
+                elif resp.status_code == 403:
+                    # Báo lỗi sai mật khẩu và ngắt kết nối
+                    self.root.after(0, lambda: self._reset_party_ui("Sai mật khẩu phòng!"))
+                    break
+            except Exception:
+                pass
+                
+            time.sleep(3 if empty_room_counter > 0 else 1)
 
     def _update_statuses(self):
         self.local_status_var.set(self._local_status_text())
@@ -1024,12 +1122,12 @@ class MapApp:
         hk_text = self.current_hotkey_name
         if self.map_visible:
             self.map_frame.pack_forget()
-            self.root.geometry("400x760")
+            self.root.geometry("400x820")
             self.root.resizable(False, False)
             self.btn_toggle_map.configure(text=f"MỞ BẢN ĐỒ (Phím {hk_text})", fg_color=["#3a7ebf", "#1f538d"], hover_color=["#325882", "#14375e"])
             self.map_visible = False
         else:
-            self.root.geometry("1100x760")
+            self.root.geometry("1100x820")
             self.root.resizable(True, True) 
             self.map_frame.pack(side="right", fill="both", expand=True, padx=(5, 0))
             self.btn_toggle_map.configure(text=f"ẨN BẢN ĐỒ (Phím {hk_text})", fg_color="#c0392b", hover_color="#922b21")
@@ -1500,13 +1598,11 @@ class MapApp:
 
         self._draw_zone_toggles_on(canvas, is_ingame)
         
-        # Vẽ Tên Khu vực
         if self.show_regions_var.get() and MAP_LABELS:
             for name, pos, color, size in MAP_LABELS:
                 x, y = self._pixel(pos, is_ingame)
                 _draw_text_with_outline(canvas, x + TEXT_OFFSET_X, y + TEXT_OFFSET_Y, name, size, color)
 
-        # Vẽ History Path
         positions = self.path_history + ([self.current] if self.current else [])
         if len(positions) >= 2:
             points = []
@@ -1519,7 +1615,19 @@ class MapApp:
             x, y = self._pixel(pos, is_ingame)
             canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill="#55a8c9", outline="white", width=2)
 
-        # Vẽ Marker hiện tại
+        if getattr(self, 'is_party_active', False) and getattr(self, 'teammates', None):
+            try:
+                for tid, tdata in self.teammates.items():
+                    tpos = tdata["pos"]
+                    tyaw = tdata["yaw"]
+                    tx, ty = self._pixel(tpos, is_ingame)
+                    
+                    _draw_heading_polygon(canvas, tx, ty, tyaw, 14, "#2ecc71")
+                    canvas.create_oval(tx - 6, ty - 6, tx + 6, ty + 6, fill="#27ae60", outline="white", width=1)
+                    _draw_text_with_outline(canvas, tx, ty + 20, f"[{tid}]", 9, "#2ecc71")
+            except Exception:
+                pass
+
         if self.current:
             heading = self._current_heading_degrees()
             x, y = self._pixel(self.current, is_ingame)
