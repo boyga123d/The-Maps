@@ -25,12 +25,7 @@ import customtkinter as ctk
 import islepilot
 import localtelemetry
 
-# ========================================================
-# CẤU HÌNH API ĐỒNG ĐỘI (PARTY) TRỰC TIẾP TRONG CODE
-# ========================================================
-API_URL = "http://ABCXYZ:8000/sync"
-
-# --- CẤU HÌNH GIAO DIỆN ---
+# --- CẤU HÌNH GIAO DIỆN & FILE LƯU TRỮ ---
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
@@ -42,6 +37,7 @@ DATA_ROOT = (
 )
 MAPS_DIR = RESOURCE_ROOT / "maps"
 CONFIG_PATH = DATA_ROOT / "config.json"
+CONFIG_SV_PATH = DATA_ROOT / "configsv.json"  # File lưu cấu hình Server API
 APP_ICON_ICO = RESOURCE_ROOT / "assets" / "the_maps.ico"
 APP_ICON_PNG = RESOURCE_ROOT / "assets" / "the_maps.png"
 YOUTUBE_URL = "https://www.youtube.com/@GlobalDailyHighlights"
@@ -454,7 +450,6 @@ class MiniMapPanel:
             border_color = "#e74c3c" if self.is_movable else "#37474f"
             self.canvas.create_oval(2, 2, MINI_MAP_SIZE-2, MINI_MAP_SIZE-2, outline=border_color, width=2, tags="border_oval")
 
-        # Vẽ đồng đội trên Minimap
         if teammates:
             try:
                 for tid, tdata in teammates.items():
@@ -659,6 +654,8 @@ class MapApp:
         self.last_clipboard_sequence = ctypes.windll.user32.GetClipboardSequenceNumber()
 
         # Biến cho tính năng Party
+        saved_api_url = self._load_sv_config()
+        self.api_url_var = ctk.StringVar(value=saved_api_url)
         self.party_code_var = ctk.StringVar(value="")
         self.party_pw_var = ctk.StringVar(value="")
         self.player_id = str(uuid.uuid4())[:4].upper()
@@ -718,7 +715,7 @@ class MapApp:
 
         self.root.title(f"The-Maps v{APP_VERSION}")
         if APP_ICON_ICO.exists(): self.root.iconbitmap(default=str(APP_ICON_ICO))
-        self.root.geometry("400x820")
+        self.root.geometry("400x720")
         self.root.resizable(False, False)
         self.root.attributes("-topmost", True)
         self.root.protocol("WM_DELETE_WINDOW", self._exit)
@@ -766,6 +763,23 @@ class MapApp:
             style |= WS_EX_NOACTIVATE
             user32.SetWindowLongW(hwnd, -20, style)
         except Exception: pass
+
+    # ĐỌC URL API TỪ FILE
+    def _load_sv_config(self) -> str:
+        if CONFIG_SV_PATH.exists():
+            try: 
+                data = json.loads(CONFIG_SV_PATH.read_text(encoding="utf-8"))
+                return data.get("api_url", "")
+            except (json.JSONDecodeError, OSError): pass
+        return ""
+    # GHI LẠI URL API VÀO FILE
+    def _save_sv_config(self) -> None:
+        DATA_ROOT.mkdir(parents=True, exist_ok=True)
+        try:
+            CONFIG_SV_PATH.write_text(json.dumps({
+                "api_url": self.api_url_var.get().strip()
+            }, indent=2), encoding="utf-8")
+        except OSError: pass
 
     def _load_app_config(self) -> MapProfile:
         selected_map = ""
@@ -816,120 +830,113 @@ class MapApp:
         self.control_frame.pack_propagate(False)
 
         header_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        header_frame.pack(pady=(20, 5))
-        ctk.CTkLabel(header_frame, text="THE-MAPS v2.2", font=ctk.CTkFont(size=24, weight="bold")).pack()
-        ctk.CTkLabel(header_frame, text="Control Panel", font=ctk.CTkFont(size=12), text_color="gray").pack()
+        header_frame.pack(pady=(10, 2))
+        ctk.CTkLabel(header_frame, text="THE-MAPS v2.3", font=ctk.CTkFont(size=22, weight="bold")).pack()
+        ctk.CTkLabel(header_frame, text="HUD THE ISLE", font=ctk.CTkFont(size=11), text_color="gray").pack()
 
         self.btn_toggle_map = ctk.CTkButton(
             self.control_frame, text=f"MỞ BẢN ĐỒ (Phím {self.current_hotkey_name})", 
-            font=ctk.CTkFont(size=14, weight="bold"), height=45,
+            font=ctk.CTkFont(size=14, weight="bold"), height=38,
             command=self._toggle_map_view
         )
-        self.btn_toggle_map.pack(pady=(15, 5), padx=20, fill="x")
+        self.btn_toggle_map.pack(pady=(10, 5), padx=20, fill="x")
 
         hk_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        hk_frame.pack(fill="x", padx=20, pady=(5, 5))
+        hk_frame.pack(fill="x", padx=20, pady=(0, 2))
         hk_frame.grid_columnconfigure(0, weight=1)
         hk_frame.grid_columnconfigure(1, weight=1)
         hk_frame.grid_columnconfigure(2, weight=1)
 
         ctk.CTkLabel(hk_frame, text="Ẩn/Hiện:").grid(row=0, column=0, sticky="w", padx=(0, 2))
-        self.hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_hotkey_change, width=105)
+        self.hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_hotkey_change, width=105, height=26)
         self.hotkey_combo.set(self.current_hotkey_name)
-        self.hotkey_combo.grid(row=1, column=0, sticky="w", pady=(0, 10), padx=(0, 2))
+        self.hotkey_combo.grid(row=1, column=0, sticky="w", pady=(0, 5), padx=(0, 2))
 
         ctk.CTkLabel(hk_frame, text="Map Ingame:").grid(row=0, column=1, sticky="w", padx=(2, 2))
-        self.ingame_hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_ingame_hotkey_change, width=105)
+        self.ingame_hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_ingame_hotkey_change, width=105, height=26)
         self.ingame_hotkey_combo.set(self.ingame_hotkey_name)
-        self.ingame_hotkey_combo.grid(row=1, column=1, sticky="w", pady=(0, 10), padx=(2, 2))
+        self.ingame_hotkey_combo.grid(row=1, column=1, sticky="w", pady=(0, 5), padx=(2, 2))
 
         ctk.CTkLabel(hk_frame, text="Kéo HUD:").grid(row=0, column=2, sticky="w", padx=(2, 0))
-        self.move_hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_move_hotkey_change, width=105)
+        self.move_hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_move_hotkey_change, width=105, height=26)
         self.move_hotkey_combo.set(self.move_hotkey_name)
-        self.move_hotkey_combo.grid(row=1, column=2, sticky="w", pady=(0, 10), padx=(2, 0))
+        self.move_hotkey_combo.grid(row=1, column=2, sticky="w", pady=(0, 5), padx=(2, 0))
 
         ctk.CTkLabel(self.control_frame, text="Độ mờ MiniMap & Nhiệm vụ:").pack(anchor="w", padx=20, pady=(0, 0))
-        self.opacity_slider = ctk.CTkSlider(self.control_frame, from_=0.2, to=1.0, command=self._on_opacity_change)
+        self.opacity_slider = ctk.CTkSlider(self.control_frame, from_=0.2, to=1.0, command=self._on_opacity_change, height=14)
         self.opacity_slider.set(self.minimap_opacity)
-        self.opacity_slider.pack(fill="x", padx=20, pady=(0, 5))
+        self.opacity_slider.pack(fill="x", padx=20, pady=(0, 4))
 
         shape_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        shape_frame.pack(fill="x", padx=20, pady=(0, 5))
-        ctk.CTkLabel(shape_frame, text="Hình dáng MiniMap:").pack(side="left")
+        shape_frame.pack(fill="x", padx=20, pady=(0, 2))
+        ctk.CTkLabel(shape_frame, text="Hình dáng:").pack(side="left")
         self.shape_seg = ctk.CTkSegmentedButton(shape_frame, values=["Vuông", "Tròn"], variable=self.shape_var, command=self._on_shape_change)
         self.shape_seg.pack(side="right")
 
         hud_opts_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        hud_opts_frame.pack(fill="x", padx=20, pady=(5, 5))
+        hud_opts_frame.pack(fill="x", padx=20, pady=(2, 2))
         hud_opts_frame.grid_columnconfigure(0, weight=1)
         hud_opts_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkCheckBox(hud_opts_frame, text="Hiện MiniMap", variable=self.show_minimap_var, command=self._on_hud_toggle).grid(row=0, column=0, sticky="w", pady=5)
-        ctk.CTkCheckBox(hud_opts_frame, text="Hiện Chỉ số", variable=self.show_vitals_var, command=self._on_hud_toggle).grid(row=0, column=1, sticky="w", pady=5)
-        ctk.CTkCheckBox(hud_opts_frame, text="Hiện Nhiệm vụ", variable=self.show_quests_var, command=self._on_hud_toggle).grid(row=1, column=0, sticky="w", pady=5)
-        ctk.CTkCheckBox(hud_opts_frame, text="Tên Khu Vực", variable=self.show_regions_var, command=self._on_region_toggle).grid(row=1, column=1, sticky="w", pady=5)
+        ctk.CTkCheckBox(hud_opts_frame, text="Hiện MiniMap", variable=self.show_minimap_var, command=self._on_hud_toggle, checkbox_width=20, checkbox_height=20).grid(row=0, column=0, sticky="w", pady=2)
+        ctk.CTkCheckBox(hud_opts_frame, text="Hiện Chỉ số", variable=self.show_vitals_var, command=self._on_hud_toggle, checkbox_width=20, checkbox_height=20).grid(row=0, column=1, sticky="w", pady=2)
+        ctk.CTkCheckBox(hud_opts_frame, text="Hiện Nhiệm vụ", variable=self.show_quests_var, command=self._on_hud_toggle, checkbox_width=20, checkbox_height=20).grid(row=1, column=0, sticky="w", pady=2)
+        ctk.CTkCheckBox(hud_opts_frame, text="Tên Khu Vực", variable=self.show_regions_var, command=self._on_region_toggle, checkbox_width=20, checkbox_height=20).grid(row=1, column=1, sticky="w", pady=2)
 
-        # --- TÍNH NĂNG ĐỒNG ĐỘI (PARTY CODE) ---
-        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=5)
-        ctk.CTkLabel(self.control_frame, text="Mã Code Đồng Đội & Mật Khẩu:").pack(anchor="w", padx=20)
+        # --- TÍNH NĂNG ĐỒNG ĐỘI (PARTY) ---
+        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=4)
+        ctk.CTkLabel(self.control_frame, text="API Server & Chế độ Đồng Đội:").pack(anchor="w", padx=20)
         
+        # Ô nhập URL API (VPS)
+        self.entry_api = ctk.CTkEntry(self.control_frame, textvariable=self.api_url_var, height=28, placeholder_text="http://IP_VPS:8000/sync")
+        self.entry_api.pack(fill="x", padx=20, pady=(0, 4))
+
         party_row = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        party_row.pack(fill="x", padx=20, pady=(0, 10))
+        party_row.pack(fill="x", padx=20, pady=(0, 4))
         
-        self.entry_party = ctk.CTkEntry(party_row, textvariable=self.party_code_var, width=120, placeholder_text="Mã phòng...")
+        self.entry_party = ctk.CTkEntry(party_row, textvariable=self.party_code_var, width=120, placeholder_text="Mã phòng...", height=28)
         self.entry_party.pack(side="left", padx=(0, 5))
         
-        self.entry_party_pw = ctk.CTkEntry(party_row, textvariable=self.party_pw_var, width=100, placeholder_text="Mật khẩu", show="*")
+        self.entry_party_pw = ctk.CTkEntry(party_row, textvariable=self.party_pw_var, width=100, placeholder_text="Mật khẩu", show="*", height=28)
         self.entry_party_pw.pack(side="left", padx=(0, 10))
         
-        self.btn_party = ctk.CTkButton(party_row, text="Kết nối", width=70, command=self._toggle_party)
+        self.btn_party = ctk.CTkButton(party_row, text="Kết nối", width=70, height=28, command=self._toggle_party)
         self.btn_party.pack(side="left")
 
-        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=5)
-
-        ctk.CTkLabel(self.control_frame, text="Bản đồ hiển thị:").pack(anchor="w", padx=20, pady=(5, 0))
-        self.map_combo = ctk.CTkComboBox(
-            self.control_frame, values=[p.name for p in self.profiles], command=self._select_profile
-        )
+        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=4)
+        ctk.CTkLabel(self.control_frame, text="Bản đồ hiển thị:").pack(anchor="w", padx=20, pady=(0, 0))
+        self.map_combo = ctk.CTkComboBox(self.control_frame, values=[p.name for p in self.profiles], command=self._select_profile, height=28)
         self.map_combo.set(self.profile.name)
-        self.map_combo.pack(fill="x", padx=20, pady=(0, 10))
+        self.map_combo.pack(fill="x", padx=20, pady=(0, 4))
 
         ctk.CTkLabel(self.control_frame, text="IslePilot (Chỉ số & Nhiệm vụ):").pack(anchor="w", padx=20)
         self.islepilot_status_var = tk.StringVar(value=self._islepilot_status_text())
         ctk.CTkLabel(self.control_frame, textvariable=self.islepilot_status_var, text_color="#4caf50", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=20)
         
         islepilot_btn_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        islepilot_btn_frame.pack(fill="x", padx=20, pady=(5, 10))
+        islepilot_btn_frame.pack(fill="x", padx=20, pady=(0, 4))
         
-        self.btn_islepilot = ctk.CTkButton(
-            islepilot_btn_frame, text="Đăng nhập Steam", 
-            fg_color="#2b7a2b", hover_color="#1e541e", command=self._on_connect_click
-        )
+        self.btn_islepilot = ctk.CTkButton(islepilot_btn_frame, text="Đăng nhập Steam", fg_color="#2b7a2b", hover_color="#1e541e", command=self._on_connect_click, height=28)
         self.btn_islepilot.pack(side="left", fill="x", expand=True, padx=(0, 5))
         
-        self.btn_islepilot_token = ctk.CTkButton(
-            islepilot_btn_frame, text="Nhập Token Web", 
-            fg_color="#2980b9", hover_color="#1f618d", command=self._on_manual_token_click
-        )
+        self.btn_islepilot_token = ctk.CTkButton(islepilot_btn_frame, text="Nhập Token Web", fg_color="#2980b9", hover_color="#1f618d", command=self._on_manual_token_click, height=28)
         self.btn_islepilot_token.pack(side="right", fill="x", expand=True)
 
-        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=5)
-
+        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=4)
         ctk.CTkLabel(self.control_frame, text="Local position realtime (Npcap):").pack(anchor="w", padx=20)
         self.local_status_var = tk.StringVar(value=self._local_status_text())
         ctk.CTkLabel(self.control_frame, textvariable=self.local_status_var, text_color="#607d8b", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=20)
 
         btn_row = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        btn_row.pack(fill="x", padx=20, pady=(5, 10))
-        ctk.CTkButton(btn_row, text="Kiểm tra lại", width=120, command=lambda: (self._retry_local_telemetry(), self.local_status_var.set(self._local_status_text()))).pack(side="left")
-        ctk.CTkButton(btn_row, text="Cài Npcap", width=120, fg_color="#c0392b", hover_color="#922b21", command=self._install_npcap_async).pack(side="right")
+        btn_row.pack(fill="x", padx=20, pady=(0, 4))
+        ctk.CTkButton(btn_row, text="Kiểm tra lại", width=120, command=lambda: (self._retry_local_telemetry(), self.local_status_var.set(self._local_status_text())), height=28).pack(side="left")
+        ctk.CTkButton(btn_row, text="Cài Npcap", width=120, fg_color="#c0392b", hover_color="#922b21", command=self._install_npcap_async, height=28).pack(side="right")
 
         footer = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        footer.pack(fill="x", padx=20, side="bottom", pady=20)
-        ctk.CTkButton(footer, text="Youtube", width=120, fg_color="#555555", hover_color="#333333", command=lambda: webbrowser.open(YOUTUBE_URL)).pack(side="left")
-        ctk.CTkButton(footer, text="Discord", width=120, fg_color="#5865F2", hover_color="#4752C4", command=lambda: webbrowser.open(DISCORD_URL)).pack(side="right")
+        footer.pack(fill="x", padx=20, side="bottom", pady=10)
+        ctk.CTkButton(footer, text="Youtube", width=120, fg_color="#555555", hover_color="#333333", command=lambda: webbrowser.open(YOUTUBE_URL), height=28).pack(side="left")
+        ctk.CTkButton(footer, text="Discord", width=120, fg_color="#5865F2", hover_color="#4752C4", command=lambda: webbrowser.open(DISCORD_URL), height=28).pack(side="right")
 
-        # --- KHUNG BẢN ĐỒ CHÍNH (MENU) ---
         self.map_frame = ctk.CTkFrame(self.root, corner_radius=0)
         self.menu_canvas = tk.Canvas(self.map_frame, background="#000000", highlightthickness=0)
         self.menu_canvas.pack(fill="both", expand=True)
@@ -940,7 +947,6 @@ class MapApp:
         self.menu_canvas.bind("<ButtonRelease-1>", lambda e: self._on_pan_end(e, False))
         self.menu_canvas.bind("<Double-Button-1>", lambda e: self._on_reset_view(e, False))
 
-        # --- KHUNG BẢN ĐỒ INGAME (M) ---
         self.ingame_canvas = tk.Canvas(self.ingame_map_window, background="#000000", highlightthickness=2, highlightbackground="#f1c40f")
         self.ingame_canvas.pack(fill="both", expand=True)
         self.ingame_canvas.bind("<Configure>", lambda e: self._redraw_ingame())
@@ -957,6 +963,7 @@ class MapApp:
         self.btn_party.configure(text="Kết nối", fg_color=["#3a7ebf", "#1f538d"], hover_color=["#325882", "#14375e"])
         self.entry_party.configure(state="normal")
         self.entry_party_pw.configure(state="normal")
+        self.entry_api.configure(state="normal")
         self.teammates.clear()
         self._redraw()
         if show_error:
@@ -970,10 +977,21 @@ class MapApp:
             if not code:
                 messagebox.showwarning("The-Maps", "Vui lòng nhập mã phòng!")
                 return
+            
+            # Thêm chặn nếu để trống ô API
+            api_url = self.api_url_var.get().strip()
+            if not api_url:
+                messagebox.showwarning("The-Maps", "Vui lòng nhập API Server (VD: http://IP:8000/sync)!")
+                return
+            
+            # Ghi cấu hình API URL vào file trước khi chạy
+            self._save_sv_config()
+            
             self.is_party_active = True
             self.btn_party.configure(text="Ngắt", fg_color="#c0392b", hover_color="#922b21")
             self.entry_party.configure(state="disabled")
             self.entry_party_pw.configure(state="disabled")
+            self.entry_api.configure(state="disabled")
             threading.Thread(target=self._party_sync_loop, daemon=True).start()
 
     def _party_sync_loop(self):
@@ -992,8 +1010,9 @@ class MapApp:
                 "yaw": yaw
             }
             
+            target_url = self.api_url_var.get().strip()
             try:
-                resp = requests.post(API_URL, json=payload, timeout=3)
+                resp = requests.post(target_url, json=payload, timeout=3)
                 if resp.status_code == 200:
                     data = resp.json().get("teammates", [])
                     
@@ -1010,7 +1029,6 @@ class MapApp:
                     else:
                         empty_room_counter = 0
                 elif resp.status_code == 403:
-                    # Báo lỗi sai mật khẩu và ngắt kết nối
                     self.root.after(0, lambda: self._reset_party_ui("Sai mật khẩu phòng!"))
                     break
             except Exception:
@@ -1069,7 +1087,7 @@ class MapApp:
             self._hud.update_map(
                 self.source_image, self.profile, self.current.x, self.current.y, heading,
                 zone_images=self._active_zone_images(), path_history=self.path_history,
-                show_regions=self.show_regions_var.get(), shape=self.minimap_shape
+                show_regions=self.show_regions_var.get(), shape=self.minimap_shape, teammates=self.teammates
             )
 
     def _on_region_toggle(self) -> None:
@@ -1122,12 +1140,12 @@ class MapApp:
         hk_text = self.current_hotkey_name
         if self.map_visible:
             self.map_frame.pack_forget()
-            self.root.geometry("400x820")
+            self.root.geometry("400x720")
             self.root.resizable(False, False)
             self.btn_toggle_map.configure(text=f"MỞ BẢN ĐỒ (Phím {hk_text})", fg_color=["#3a7ebf", "#1f538d"], hover_color=["#325882", "#14375e"])
             self.map_visible = False
         else:
-            self.root.geometry("1100x820")
+            self.root.geometry("1100x720")
             self.root.resizable(True, True) 
             self.map_frame.pack(side="right", fill="both", expand=True, padx=(5, 0))
             self.btn_toggle_map.configure(text=f"ẨN BẢN ĐỒ (Phím {hk_text})", fg_color="#c0392b", hover_color="#922b21")
@@ -1308,7 +1326,7 @@ class MapApp:
         self._local_heading_deg = self.profile.transform_yaw(sample.yaw)
         
         if self._hud is None: self._hud = IslePilotHud(self.root, opacity=self.minimap_opacity)
-        self._hud.update_map(self.source_image, self.profile, position.x, position.y, self._local_heading_deg, zone_images=self._active_zone_images(), path_history=self.path_history, show_regions=self.show_regions_var.get(), shape=self.minimap_shape)
+        self._hud.update_map(self.source_image, self.profile, position.x, position.y, self._local_heading_deg, zone_images=self._active_zone_images(), path_history=self.path_history, show_regions=self.show_regions_var.get(), shape=self.minimap_shape, teammates=self.teammates)
         if self.map_visible or getattr(self, 'ingame_map_visible', False): self._redraw()
 
     def _islepilot_status_text(self) -> str:
@@ -1399,7 +1417,7 @@ class MapApp:
         draw_position = position or self.current
         if self._hud is not None and draw_position is not None:
             heading = self._islepilot_heading_deg if self._islepilot_heading_deg is not None else 0.0
-            self._hud.update_map(self.source_image, self.profile, draw_position.x, draw_position.y, heading, zone_images=self._active_zone_images(), path_history=self.path_history, show_regions=self.show_regions_var.get(), shape=self.minimap_shape)
+            self._hud.update_map(self.source_image, self.profile, draw_position.x, draw_position.y, heading, zone_images=self._active_zone_images(), path_history=self.path_history, show_regions=self.show_regions_var.get(), shape=self.minimap_shape, teammates=self.teammates)
 
     def _poll_hud_visibility(self) -> None:
         if self._hud is not None:
