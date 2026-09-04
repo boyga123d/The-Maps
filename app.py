@@ -421,12 +421,7 @@ class MiniMapPanel:
                 hy = (hny - top) / frac * MINI_MAP_SIZE
                 points.extend((hx, hy))
             if len(points) >= 4:
-                self.canvas.create_line(*points, fill="#d4e3e8", width=2, dash=(3, 5))
-            for pos in path_history:
-                hnx, hny = profile.to_normalized(pos)
-                hx = (hnx - left) / frac * MINI_MAP_SIZE
-                hy = (hny - top) / frac * MINI_MAP_SIZE
-                self.canvas.create_oval(hx - 2, hy - 2, hx + 2, hy + 2, fill="#55a8c9", outline="")
+                self.canvas.create_line(*points, fill="#55a8c9", width=2.5, joinstyle="round", capstyle="round")
 
         if show_regions and MAP_LABELS:
             for name, pos, color, size in MAP_LABELS:
@@ -1003,7 +998,6 @@ class MapApp:
                     frac = max(0.0, min(1.0, val / max_val)) if max_val else 0
                     bar = ctk.CTkProgressBar(parent, height=5, progress_color=color, fg_color="#26343a")
                     bar.set(frac)
-                    # Thanh chỉ số giờ sẽ xếp DỌC chồng lên nhau cực gọn
                     bar.pack(side="top", fill="x", pady=2)
 
                 make_bar(bars_frame, tvitals.get('h', 0), tvitals.get('mh', 1), "#e74c3c")
@@ -1086,7 +1080,6 @@ class MapApp:
                     
                     valid_teammates = {}
                     for t in data:
-                        # KHÔNG lọc bỏ 999999.0 nữa để có thể nhận Ping của ng đang đứng ngoài game
                         has_pos = (t["x"] != 999999.0 and t["y"] != 999999.0)
                         
                         valid_teammates[t["id"]] = {
@@ -1735,19 +1728,16 @@ class MapApp:
                 x, y = self._pixel(pos, is_ingame)
                 _draw_text_with_outline(canvas, x + TEXT_OFFSET_X, y + TEXT_OFFSET_Y, name, size, color)
 
+        # Lịch sử đường đi: Đã được vẽ bằng nét bo góc mượt mà, bỏ các hình tròn
         positions = self.path_history + ([self.current] if self.current else [])
         if len(positions) >= 2:
             points = []
             for position in positions:
                 x, y = self._pixel(position, is_ingame)
                 points.extend((x, y))
-            canvas.create_line(*points, fill="#d4e3e8", width=2, dash=(3, 7))
-            
-        for pos in self.path_history:
-            x, y = self._pixel(pos, is_ingame)
-            canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill="#55a8c9", outline="white", width=2)
+            canvas.create_line(*points, fill="#55a8c9", width=3, joinstyle="round", capstyle="round")
 
-        # ---------------- Vẽ Ping Đồng Đội & Bản Thân (Bất chấp có GPS hay không) ----------------
+        # ---------------- Vẽ Ping Đồng Đội & Bản Thân ----------------
         if getattr(self, 'is_party_active', False) and getattr(self, 'teammates', None):
             for tid, tdata in self.teammates.items():
                 if tdata.get("ping"):
@@ -1766,7 +1756,7 @@ class MapApp:
         if getattr(self, 'is_party_active', False) and getattr(self, 'teammates', None):
             try:
                 for tid, tdata in self.teammates.items():
-                    if not tdata.get("has_pos"): continue # Bỏ qua vẽ nhân vật nếu chưa có GPS
+                    if not tdata.get("has_pos"): continue
                     tpos = tdata["pos"]
                     tyaw = tdata["yaw"]
                     tname = tdata["name"]
