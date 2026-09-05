@@ -84,7 +84,6 @@ MAX_HISTORY_POINTS = 100
 ZONE_LAYERS: tuple[tuple[str, str, str, str], ...] = (
     # ("migrations", "Migration", "zone_migration.png", "#ff9800"),
     ("Nước", "Nước ngọt", "gateway_water.webp", "#09a5e2"),
-    ("Khu tuần tra", "Khu tuần tra", "zone_patrol.png", "#ab47bc"),
     ("400OV", "400 Ô", "number.png", "#1674f0"),
     ("600OV", "600 Ô", "number2.png", "#eef106"),
 )
@@ -1231,6 +1230,7 @@ class MapApp:
         self.show_minimap_var = ctk.BooleanVar(value=True)
         self.show_vitals_var = ctk.BooleanVar(value=True)
         self.show_quests_var = ctk.BooleanVar(value=True)
+        self.show_hud_when_app_focused_var = ctk.BooleanVar(value=False)
         
         self.show_teammate_vitals_map_var = ctk.BooleanVar(value=True)
         self.show_teammate_vitals_menu_var = ctk.BooleanVar(value=True)
@@ -1315,6 +1315,11 @@ class MapApp:
 
         self.map_visible = False
         self.ingame_map_visible = False
+
+        # True only when the in-game map is temporarily hidden because
+        # The Isle is not the foreground application.
+        # This does NOT change the user's actual on/off state.
+        self._ingame_map_focus_hidden = False
 
         self.local_markers: list[dict] = []
         self.gateway_pois: dict[str, list[dict]] = {"sanctuaries": [], "migrations": [], "patrol_zones": [], "salt_licks": []}
@@ -1402,6 +1407,30 @@ class MapApp:
             title = buf.value.lower().strip()
             return title == "the isle"
         except Exception: return False
+
+    def _is_app_foreground(self) -> bool:
+        """True khi cửa sổ foreground thuộc chính process The-Maps."""
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return False
+
+            pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            return int(pid.value) == int(os.getpid())
+        except Exception:
+            return False
+
+    def _focus_allows_hud(self) -> bool:
+        """Quyết định HUD/In-game Map có được phép hiện theo option focus."""
+        if self._is_game_foreground():
+            return True
+
+        return bool(
+            self.show_hud_when_app_focused_var.get()
+            and self._is_app_foreground()
+        )
 
     def _load_gateway_pois(self) -> None:
         """Load only Sanctuaries, Migrations, Patrol Zones and Salt from the second JSON file."""
@@ -1570,6 +1599,9 @@ class MapApp:
                 self.show_minimap_var.set(data.get("show_minimap", True))
                 self.show_vitals_var.set(data.get("show_vitals", True))
                 self.show_quests_var.set(data.get("show_quests", True))
+                self.show_hud_when_app_focused_var.set(
+                    data.get("show_hud_when_app_focused", False)
+                )
                 self.show_teammate_vitals_map_var.set(data.get("show_teammate_vitals_map", True))
                 self.show_teammate_vitals_menu_var.set(data.get("show_teammate_vitals_menu", True))
                 try:
@@ -1594,6 +1626,7 @@ class MapApp:
             "show_minimap": self.show_minimap_var.get(),
             "show_vitals": self.show_vitals_var.get(),
             "show_quests": self.show_quests_var.get(),
+            "show_hud_when_app_focused": self.show_hud_when_app_focused_var.get(),
             "show_teammate_vitals_map": self.show_teammate_vitals_map_var.get(),
             "show_teammate_vitals_menu": self.show_teammate_vitals_menu_var.get(),
             "ping_duration_minutes": self._get_ping_duration_minutes()
@@ -1659,6 +1692,16 @@ class MapApp:
         ctk.CTkCheckBox(hud_checks, text="Hiện Chỉ số", variable=self.show_vitals_var, command=self._on_hud_toggle, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).grid(row=0, column=1, sticky="w", pady=2)
         ctk.CTkCheckBox(hud_checks, text="Hiện Nhiệm vụ", variable=self.show_quests_var, command=self._on_hud_toggle, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).grid(row=1, column=0, sticky="w", pady=2)
         ctk.CTkCheckBox(hud_checks, text="Tên Khu Vực", variable=self.show_regions_var, command=self._on_region_toggle, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).grid(row=1, column=1, sticky="w", pady=2)
+
+        ctk.CTkCheckBox(
+            hud_checks,
+            text="HUD/Map hiện khi focus The-Maps",
+            variable=self.show_hud_when_app_focused_var,
+            command=self._on_focus_mode_change,
+            checkbox_width=16,
+            checkbox_height=16,
+            font=ctk.CTkFont(size=11)
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 2))
 
         # CARD 2: ĐỘNG VẬT (COLLAPSIBLE)
         card_animal = ctk.CTkFrame(self.control_frame, fg_color=CARD_BG, border_width=1, border_color=CARD_BORDER, corner_radius=10)
@@ -2070,10 +2113,14 @@ class MapApp:
         self._save_app_config()
         self._redraw()
 
+    def _on_focus_mode_change(self) -> None:
+        self._save_app_config()
+        self._apply_focus_visibility()
+
     def _on_hud_toggle(self) -> None:
         self._save_app_config()
         if getattr(self, '_hud', None) is not None:
-            self._poll_hud_visibility()
+            self._apply_focus_visibility()
 
     def _on_connect_click(self):
         if self._islepilot_connected():
@@ -2099,15 +2146,27 @@ class MapApp:
 
     def _toggle_ingame_map(self) -> None:
         if self.ingame_map_visible:
+            # User explicitly turned the in-game map OFF.
             self.ingame_map_window.withdraw()
             self.ingame_map_visible = False
+            self._ingame_map_focus_hidden = False
         else:
             if self.map_visible:
                 self._toggle_map_view()
-            self.ingame_map_window.deiconify()
-            self.ingame_map_window.lift()
+
+            # User explicitly turned the in-game map ON.
             self.ingame_map_visible = True
-            self._redraw_ingame()
+            self._ingame_map_focus_hidden = False
+
+            # Respect the selected HUD/Map focus mode immediately.
+            if self._focus_allows_hud():
+                self.ingame_map_window.deiconify()
+                self.ingame_map_window.lift()
+                self._set_window_noactivate(self.ingame_map_window)
+                self._redraw_ingame()
+            else:
+                self.ingame_map_window.withdraw()
+                self._ingame_map_focus_hidden = True
 
     def _toggle_map_view(self) -> None:
         if getattr(self, 'ingame_map_visible', False):
@@ -2398,27 +2457,65 @@ class MapApp:
             heading = getattr(self, '_islepilot_heading_deg', 0.0) if getattr(self, '_islepilot_heading_deg', None) is not None else 0.0
             self._hud.update_map(self.source_image, self.profile, draw_position.x, draw_position.y, heading, zone_images=self._active_zone_images(), path_history=self.path_history, show_regions=self.show_regions_var.get(), shape=self.minimap_shape, teammates=self.teammates, map_app_ref=self)
 
-    def _poll_hud_visibility(self) -> None:
+    def _apply_focus_visibility(self) -> None:
         local_live = self._local_position_fresh()
         has_live_source = local_live or getattr(self, '_islepilot_online', False)
-        game_foreground = self._is_game_foreground()
+        focus_allowed = self._focus_allows_hud()
 
+        # In-game Map dùng cùng rule với HUD.
+        if getattr(self, 'ingame_map_visible', False):
+            if focus_allowed:
+                if getattr(self, '_ingame_map_focus_hidden', False):
+                    self.ingame_map_window.deiconify()
+                    self.ingame_map_window.lift()
+                    self._set_window_noactivate(self.ingame_map_window)
+                    self._ingame_map_focus_hidden = False
+                    self._redraw_ingame()
+            else:
+                if not getattr(self, '_ingame_map_focus_hidden', False):
+                    self.ingame_map_window.withdraw()
+                    self._ingame_map_focus_hidden = True
+        else:
+            self._ingame_map_focus_hidden = False
+
+        # Main HUD.
         if getattr(self, '_hud', None) is not None:
-            if has_live_source and game_foreground:
-                self._hud.show(show_minimap=self.show_minimap_var.get(), show_vitals=self.show_vitals_var.get(), show_quests=self.show_quests_var.get() and getattr(self, '_islepilot_online', False))
+            if has_live_source and focus_allowed:
+                self._hud.show(
+                    show_minimap=self.show_minimap_var.get(),
+                    show_vitals=self.show_vitals_var.get(),
+                    show_quests=(
+                        self.show_quests_var.get()
+                        and getattr(self, '_islepilot_online', False)
+                    )
+                )
             else:
                 self._hud.hide()
 
+        # Directional Ping HUD.
         ping_hud = getattr(self, '_ping_direction_hud', None)
         if ping_hud is not None:
-            if has_live_source and game_foreground and self.current is not None:
-                count = ping_hud.update(self.profile, self.current, self._current_heading_degrees(), self.teammates if self.is_party_active else {}, self.my_active_ping)
-                if count > 0: ping_hud.show()
-                else: ping_hud.hide()
+            if has_live_source and focus_allowed and self.current is not None:
+                count = ping_hud.update(
+                    self.profile,
+                    self.current,
+                    self._current_heading_degrees(),
+                    self.teammates if self.is_party_active else {},
+                    self.my_active_ping
+                )
+                if count > 0:
+                    ping_hud.show()
+                else:
+                    ping_hud.hide()
             else:
                 ping_hud.hide()
 
-        self.root.after(FOREGROUND_POLL_MS, self._poll_hud_visibility)
+    def _poll_hud_visibility(self) -> None:
+        self._apply_focus_visibility()
+        self.root.after(
+            FOREGROUND_POLL_MS,
+            self._poll_hud_visibility
+        )
 
     def _check_for_update(self) -> None:
         threading.Thread(target=self._check_for_update_worker, daemon=True).start()
