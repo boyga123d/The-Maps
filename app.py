@@ -1129,10 +1129,31 @@ class PingDirectionOverlay:
         txv, tyv = math.cos(theta), math.sin(theta)
         tipx, tipy = px+ux*17, py+uy*17
         basex, basey = px-ux*7, py-uy*7
-        self.canvas.create_polygon(tipx,tipy, basex+txv*8,basey+tyv*8, basex-txv*8,basey-tyv*8, fill=color, outline="#ffffff", width=1.2, joinstyle="round")
-        _draw_text_with_outline(self.canvas, px-ux*34, py-uy*34, f"{label}  •  {dist_text}", 10, color, outline_color="#05070a")
+        # Same directional arrow shape for Party / Manual / Asset pings.
+        # Black Asset Ping uses a white text outline so it remains visible
+        # against the game and transparent HUD background.
+        text_outline = "#ffffff" if str(color).lower() in {"#000000", "black"} else "#05070a"
 
-    def update(self, profile: MapProfile, player_pos: Position | None, player_heading: float | None, teammates: dict | None, my_ping: dict | None = None) -> int:
+        self.canvas.create_polygon(
+            tipx, tipy,
+            basex + txv*8, basey + tyv*8,
+            basex - txv*8, basey - tyv*8,
+            fill=color,
+            outline="#ffffff",
+            width=1.2,
+            joinstyle="round"
+        )
+        _draw_text_with_outline(
+            self.canvas,
+            px - ux*34,
+            py - uy*34,
+            f"{label}  •  {dist_text}",
+            10,
+            color,
+            outline_color=text_outline
+        )
+
+    def update(self, profile: MapProfile, player_pos: Position | None, player_heading: float | None, teammates: dict | None, my_ping: dict | None = None, manual_ping: dict | None = None, asset_ping: dict | None = None) -> int:
         self.canvas.delete("all")
         if player_pos is None or player_heading is None: return 0
         entries = []
@@ -1160,6 +1181,30 @@ class PingDirectionOverlay:
                     expired = False
             if not expired:
                 entries.append((my_ping["pos"], "Ping bạn", ACCENT_CYAN))
+
+        if manual_ping and isinstance(manual_ping.get("pos"), Position):
+            expires_at = manual_ping.get("expires_at")
+            expired = False
+            if expires_at is not None:
+                try:
+                    expired = float(expires_at) <= time.time()
+                except (TypeError, ValueError):
+                    expired = False
+            if not expired:
+                entries.append(
+                    (manual_ping["pos"], "Manual Ping", ACCENT_RED)
+                )
+        if asset_ping and isinstance(asset_ping.get("pos"), Position):
+            expires_at = asset_ping.get("expires_at")
+            expired = False
+            if expires_at is not None:
+                try:
+                    expired = float(expires_at) <= time.time()
+                except (TypeError, ValueError):
+                    expired = False
+            if not expired:
+                entries.append((asset_ping["pos"], "Asset Ping", "#000000"))
+
         for i,(p,label,color) in enumerate(entries): self._draw_one(profile, player_pos, float(player_heading), p, label, color, i)
         return len(entries)
 
@@ -1232,10 +1277,21 @@ class MapApp:
         self.show_vitals_var = ctk.BooleanVar(value=True)
         self.show_quests_var = ctk.BooleanVar(value=True)
         self.show_hud_when_app_focused_var = ctk.BooleanVar(value=False)
+        self.asset_location_ping_enabled_var = ctk.BooleanVar(value=False)
         
         self.show_teammate_vitals_map_var = ctk.BooleanVar(value=True)
         self.show_teammate_vitals_menu_var = ctk.BooleanVar(value=True)
+        # Party Ping duration (independent H / M / S)
+        self.ping_duration_hours_var = ctk.StringVar(value="0")
         self.ping_duration_minutes_var = ctk.StringVar(value="2")
+        self.ping_duration_seconds_var = ctk.StringVar(value="0")
+
+        self.manual_ping_coord_var = ctk.StringVar(value="")
+
+        # Manual Coordinate Ping duration (independent H / M / S)
+        self.manual_ping_duration_hours_var = ctk.StringVar(value="0")
+        self.manual_ping_duration_minutes_var = ctk.StringVar(value="5")
+        self.manual_ping_duration_seconds_var = ctk.StringVar(value="0")
         
         self.profiles = load_profiles()
         self.profile = self._load_app_config()
@@ -1264,6 +1320,8 @@ class MapApp:
         
         self.last_vitals = None
         self.my_active_ping = None
+        self.manual_active_ping = None
+        self.asset_location_active_ping = None
 
         self.m_zoom = MIN_ZOOM
         self.m_center_nx = 0.5
@@ -1354,6 +1412,18 @@ class MapApp:
         self.ingame_map_window.withdraw()
 
         self._build_ui()
+
+        self.root.bind(
+            "<FocusIn>",
+            lambda _e: self.root.after(20, self._apply_focus_visibility),
+            add="+"
+        )
+        self.root.bind(
+            "<FocusOut>",
+            lambda _e: self.root.after(20, self._apply_focus_visibility),
+            add="+"
+        )
+
         self._load_map_image()
         self._load_local_animal_herbs()
         self._load_gateway_pois()
@@ -1424,14 +1494,10 @@ class MapApp:
             return False
 
     def _focus_allows_hud(self) -> bool:
-        """Quyết định HUD/In-game Map có được phép hiện theo option focus."""
-        if self._is_game_foreground():
-            return True
-
-        return bool(
-            self.show_hud_when_app_focused_var.get()
-            and self._is_app_foreground()
-        )
+        """Apply the The-Maps focus option explicitly before game detection."""
+        if self._is_app_foreground():
+            return bool(self.show_hud_when_app_focused_var.get())
+        return self._is_game_foreground()
 
     def _load_gateway_pois(self) -> None:
         """Load only Sanctuaries, Migrations, Patrol Zones and Salt from the second JSON file."""
@@ -1603,14 +1669,91 @@ class MapApp:
                 self.show_hud_when_app_focused_var.set(
                     data.get("show_hud_when_app_focused", False)
                 )
+                self.asset_location_ping_enabled_var.set(
+                    data.get("asset_location_ping_enabled", False)
+                )
                 self.show_teammate_vitals_map_var.set(data.get("show_teammate_vitals_map", True))
                 self.show_teammate_vitals_menu_var.set(data.get("show_teammate_vitals_menu", True))
+                # PARTY PING H:M:S
                 try:
-                    saved_ping_minutes = float(data.get("ping_duration_minutes", 2))
-                    saved_ping_minutes = max(0.1, min(60.0, saved_ping_minutes))
-                    self.ping_duration_minutes_var.set(f"{saved_ping_minutes:g}")
+                    if any(
+                        key in data
+                        for key in (
+                            "ping_duration_hours",
+                            "ping_duration_minutes_hms",
+                            "ping_duration_seconds",
+                        )
+                    ):
+                        party_h = int(float(data.get("ping_duration_hours", 0)))
+                        party_m = int(float(data.get("ping_duration_minutes_hms", 0)))
+                        party_s = int(float(data.get("ping_duration_seconds", 0)))
+                        party_total = max(
+                            1,
+                            min(
+                                6 * 3600,
+                                party_h * 3600 + party_m * 60 + party_s
+                            )
+                        )
+                    else:
+                        # Migrate old config: ping_duration_minutes
+                        old_minutes = float(data.get("ping_duration_minutes", 2))
+                        party_total = max(
+                            1,
+                            min(6 * 3600, int(round(old_minutes * 60.0)))
+                        )
+
+                    party_h, rem = divmod(party_total, 3600)
+                    party_m, party_s = divmod(rem, 60)
+                    self.ping_duration_hours_var.set(str(party_h))
+                    self.ping_duration_minutes_var.set(str(party_m))
+                    self.ping_duration_seconds_var.set(str(party_s))
                 except (TypeError, ValueError):
+                    self.ping_duration_hours_var.set("0")
                     self.ping_duration_minutes_var.set("2")
+                    self.ping_duration_seconds_var.set("0")
+
+                # MANUAL PING H:M:S
+                try:
+                    if any(
+                        key in data
+                        for key in (
+                            "manual_ping_duration_hours",
+                            "manual_ping_duration_minutes_hms",
+                            "manual_ping_duration_seconds",
+                        )
+                    ):
+                        manual_h = int(float(data.get("manual_ping_duration_hours", 0)))
+                        manual_m = int(float(data.get("manual_ping_duration_minutes_hms", 0)))
+                        manual_s = int(float(data.get("manual_ping_duration_seconds", 0)))
+                        manual_total = max(
+                            1,
+                            min(
+                                6 * 3600,
+                                manual_h * 3600 + manual_m * 60 + manual_s
+                            )
+                        )
+                    else:
+                        # Migrate old config: manual_ping_duration_minutes
+                        old_manual_minutes = float(
+                            data.get("manual_ping_duration_minutes", 5)
+                        )
+                        manual_total = max(
+                            1,
+                            min(
+                                6 * 3600,
+                                int(round(old_manual_minutes * 60.0))
+                            )
+                        )
+
+                    manual_h, rem = divmod(manual_total, 3600)
+                    manual_m, manual_s = divmod(rem, 60)
+                    self.manual_ping_duration_hours_var.set(str(manual_h))
+                    self.manual_ping_duration_minutes_var.set(str(manual_m))
+                    self.manual_ping_duration_seconds_var.set(str(manual_s))
+                except (TypeError, ValueError):
+                    self.manual_ping_duration_hours_var.set("0")
+                    self.manual_ping_duration_minutes_var.set("5")
+                    self.manual_ping_duration_seconds_var.set("0")
             except (json.JSONDecodeError, OSError): pass
         return next((p for p in self.profiles if p.profile_id == selected_map), self.profiles[0])
 
@@ -1628,9 +1771,21 @@ class MapApp:
             "show_vitals": self.show_vitals_var.get(),
             "show_quests": self.show_quests_var.get(),
             "show_hud_when_app_focused": self.show_hud_when_app_focused_var.get(),
+            "asset_location_ping_enabled": self.asset_location_ping_enabled_var.get(),
             "show_teammate_vitals_map": self.show_teammate_vitals_map_var.get(),
             "show_teammate_vitals_menu": self.show_teammate_vitals_menu_var.get(),
-            "ping_duration_minutes": self._get_ping_duration_minutes()
+            # Legacy minute values kept for compatibility with older builds.
+            "ping_duration_minutes": self._get_ping_duration_seconds() / 60.0,
+            "manual_ping_duration_minutes": self._get_manual_ping_duration_seconds() / 60.0,
+
+            # New H:M:S settings.
+            "ping_duration_hours": int(self.ping_duration_hours_var.get() or 0),
+            "ping_duration_minutes_hms": int(self.ping_duration_minutes_var.get() or 0),
+            "ping_duration_seconds": int(self.ping_duration_seconds_var.get() or 0),
+
+            "manual_ping_duration_hours": int(self.manual_ping_duration_hours_var.get() or 0),
+            "manual_ping_duration_minutes_hms": int(self.manual_ping_duration_minutes_var.get() or 0),
+            "manual_ping_duration_seconds": int(self.manual_ping_duration_seconds_var.get() or 0)
         }, indent=2), encoding="utf-8")
 
     def _build_ui(self) -> None:
@@ -1696,13 +1851,23 @@ class MapApp:
 
         ctk.CTkCheckBox(
             hud_checks,
-            text="HUD/Map hiện khi focus The-Maps",
+            text="Hiện HUD/Map khi focus The-Maps",
             variable=self.show_hud_when_app_focused_var,
             command=self._on_focus_mode_change,
             checkbox_width=16,
             checkbox_height=16,
             font=ctk.CTkFont(size=11)
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 2))
+
+        ctk.CTkCheckBox(
+            hud_checks,
+            text="Asset Location → Ping (không mở map)",
+            variable=self.asset_location_ping_enabled_var,
+            command=self._on_asset_location_ping_toggle,
+            checkbox_width=16,
+            checkbox_height=16,
+            font=ctk.CTkFont(size=11)
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 2))
 
         # CARD 2: ĐỘNG VẬT (COLLAPSIBLE)
         card_animal = ctk.CTkFrame(self.control_frame, fg_color=CARD_BG, border_width=1, border_color=CARD_BORDER, corner_radius=10)
@@ -1760,24 +1925,164 @@ class MapApp:
 
         ping_opts = ctk.CTkFrame(card_party, fg_color="transparent")
         ping_opts.pack(fill="x", padx=10, pady=(0, 5))
+
         ctk.CTkLabel(
-            ping_opts, text="Thời gian Ping (phút):",
+            ping_opts, text="Thời gian Ping:",
             text_color=TEXT_MUTED, font=ctk.CTkFont(size=10)
         ).pack(side="left")
-        self.entry_ping_duration = ctk.CTkEntry(
-            ping_opts, textvariable=self.ping_duration_minutes_var,
-            width=58, height=25, justify="center"
+
+        def _party_time_entry(parent, variable, suffix):
+            entry = ctk.CTkEntry(
+                parent,
+                textvariable=variable,
+                width=38,
+                height=25,
+                justify="center"
+            )
+            entry.pack(side="left", padx=(5, 2))
+            ctk.CTkLabel(
+                parent,
+                text=suffix,
+                text_color="#57606f",
+                font=ctk.CTkFont(size=9)
+            ).pack(side="left")
+            entry.bind(
+                "<FocusOut>",
+                lambda _e: self._normalize_ping_duration(save=True)
+            )
+            entry.bind(
+                "<Return>",
+                lambda _e: self._normalize_ping_duration(save=True)
+            )
+            return entry
+
+        self.entry_ping_hours = _party_time_entry(
+            ping_opts, self.ping_duration_hours_var, "giờ"
         )
-        self.entry_ping_duration.pack(side="left", padx=(6, 4))
+        self.entry_ping_minutes = _party_time_entry(
+            ping_opts, self.ping_duration_minutes_var, "phút"
+        )
+        self.entry_ping_seconds = _party_time_entry(
+            ping_opts, self.ping_duration_seconds_var, "giây"
+        )
+
+        manual_ping_frame = ctk.CTkFrame(
+            card_party,
+            fg_color="#0c1015",
+            corner_radius=6,
+            border_width=1,
+            border_color="#1a2530"
+        )
+        manual_ping_frame.pack(fill="x", padx=10, pady=(2, 7))
+
         ctk.CTkLabel(
-            ping_opts, text="0.1 – 60",
-            text_color="#57606f", font=ctk.CTkFont(size=9)
+            manual_ping_frame,
+            text="⌖ Manual Coordinate Ping",
+            text_color=ACCENT_CYAN,
+            font=ctk.CTkFont(size=10, weight="bold")
+        ).pack(anchor="w", padx=8, pady=(6, 3))
+
+        manual_coord_row = ctk.CTkFrame(
+            manual_ping_frame, fg_color="transparent"
+        )
+        manual_coord_row.pack(fill="x", padx=8, pady=2)
+
+        self.entry_manual_ping_coord = ctk.CTkEntry(
+            manual_coord_row,
+            textvariable=self.manual_ping_coord_var,
+            placeholder_text="304,333.126, -310,414.508, 22,003.88",
+            height=27
+        )
+        self.entry_manual_ping_coord.pack(
+            side="left", fill="x", expand=True
+        )
+
+        manual_action_row = ctk.CTkFrame(
+            manual_ping_frame, fg_color="transparent"
+        )
+        manual_action_row.pack(fill="x", padx=8, pady=(2, 7))
+
+        ctk.CTkLabel(
+            manual_action_row,
+            text="Tồn tại:",
+            text_color=TEXT_MUTED,
+            font=ctk.CTkFont(size=9)
         ).pack(side="left")
-        self.entry_ping_duration.bind("<FocusOut>", lambda _e: self._normalize_ping_duration(save=True))
-        self.entry_ping_duration.bind("<Return>", lambda _e: self._normalize_ping_duration(save=True))
+
+        def _manual_time_entry(parent, variable, suffix):
+            entry = ctk.CTkEntry(
+                parent,
+                textvariable=variable,
+                width=34,
+                height=25,
+                justify="center"
+            )
+            entry.pack(side="left", padx=(4, 1))
+            ctk.CTkLabel(
+                parent,
+                text=suffix,
+                text_color="#57606f",
+                font=ctk.CTkFont(size=8)
+            ).pack(side="left")
+            entry.bind(
+                "<FocusOut>",
+                lambda _e: self._normalize_manual_ping_duration(save=True)
+            )
+            entry.bind(
+                "<Return>",
+                lambda _e: self._normalize_manual_ping_duration(save=True)
+            )
+            return entry
+
+        self.entry_manual_ping_hours = _manual_time_entry(
+            manual_action_row,
+            self.manual_ping_duration_hours_var,
+            "giờ"
+        )
+        self.entry_manual_ping_minutes = _manual_time_entry(
+            manual_action_row,
+            self.manual_ping_duration_minutes_var,
+            "phút"
+        )
+        self.entry_manual_ping_seconds = _manual_time_entry(
+            manual_action_row,
+            self.manual_ping_duration_seconds_var,
+            "giây"
+        )
+
+        ctk.CTkButton(
+            manual_action_row,
+            text="PING",
+            width=50,
+            height=25,
+            command=self._create_manual_coordinate_ping
+        ).pack(side="left", padx=(5, 2))
+
+        ctk.CTkButton(
+            manual_action_row,
+            text="XÓA",
+            width=46,
+            height=25,
+            fg_color="#5b1f24",
+            hover_color="#7a2930",
+            command=self._clear_manual_ping
+        ).pack(side="right")
+        self.entry_manual_ping_coord.bind(
+            "<Return>",
+            lambda _e: self._create_manual_coordinate_ping()
+        )
 
         self.teammates_panel = ctk.CTkFrame(card_party, fg_color="#0c1015", corner_radius=6)
-        self.teammates_panel.pack(fill="x", padx=10, pady=(2, 8))
+
+        # Party members must appear ABOVE Manual Coordinate Ping.
+        # "before=manual_ping_frame" changes only the UI order; all Party and
+        # Manual Ping logic remains unchanged.
+        self.teammates_panel.pack(
+            fill="x",
+            padx=10,
+            pady=(2, 8),
+            before=manual_ping_frame
+        )
         self._update_teammates_ui()
 
         # CARD 5: BẢN ĐỒ & HỆ THỐNG TELEMETRY
@@ -1905,22 +2210,216 @@ class MapApp:
             self.entry_api.configure(state="disabled")
             threading.Thread(target=self._party_sync_loop, daemon=True).start()
 
-    def _get_ping_duration_minutes(self) -> float:
+    @staticmethod
+    def _parse_hms_component(value, default: int = 0) -> int:
         try:
-            value = float(str(self.ping_duration_minutes_var.get()).strip().replace(",", "."))
+            parsed = int(float(str(value).strip()))
         except (TypeError, ValueError):
-            value = 2.0
-        return max(0.1, min(60.0, value))
+            parsed = default
+        return max(0, parsed)
 
-    def _normalize_ping_duration(self, save: bool = False) -> float:
-        value = self._get_ping_duration_minutes()
-        self.ping_duration_minutes_var.set(f"{value:g}")
+    @staticmethod
+    def _seconds_to_hms(total_seconds: int) -> tuple[int, int, int]:
+        total_seconds = max(1, int(total_seconds))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return hours, minutes, seconds
+
+    def _get_manual_ping_duration_seconds(self) -> int:
+        hours = self._parse_hms_component(
+            self.manual_ping_duration_hours_var.get()
+        )
+        minutes = self._parse_hms_component(
+            self.manual_ping_duration_minutes_var.get()
+        )
+        seconds = self._parse_hms_component(
+            self.manual_ping_duration_seconds_var.get()
+        )
+
+        # Normalize values such as 0h 90m 90s naturally through total seconds.
+        total = hours * 3600 + minutes * 60 + seconds
+
+        # Minimum 1 second, maximum 6 hours.
+        return max(1, min(6 * 3600, total))
+
+    def _normalize_manual_ping_duration(self, save: bool = False) -> int:
+        total = self._get_manual_ping_duration_seconds()
+        hours, minutes, seconds = self._seconds_to_hms(total)
+
+        self.manual_ping_duration_hours_var.set(str(hours))
+        self.manual_ping_duration_minutes_var.set(str(minutes))
+        self.manual_ping_duration_seconds_var.set(str(seconds))
+
         if save:
             try:
                 self._save_app_config()
             except Exception:
                 pass
-        return value
+
+        return total
+
+    @staticmethod
+    def _parse_manual_ping_coordinate(raw: str) -> Position | None:
+        """
+        Accept The Isle coordinates where commas inside numbers are
+        thousands separators, for example:
+
+            304,333.126, -310,414.508
+            304,333.126, -310,414.508, 22,003.88
+        """
+        raw = str(raw or "").strip()
+        if not raw:
+            return None
+
+        # Same number grammar as the game coordinate parser.
+        number_re = re.compile(
+            r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+        )
+
+        matches = list(number_re.finditer(raw))
+        if len(matches) not in (2, 3):
+            return None
+
+        # Everything between coordinate numbers must only be the coordinate
+        # separator: comma + optional whitespace. This prevents accepting
+        # unrelated text while still preserving commas INSIDE the numbers.
+        cursor = 0
+        for index, match in enumerate(matches):
+            gap = raw[cursor:match.start()]
+
+            if index == 0:
+                if gap.strip():
+                    return None
+            else:
+                if re.fullmatch(r"\s*,\s*", gap) is None:
+                    return None
+
+            cursor = match.end()
+
+        if raw[cursor:].strip():
+            return None
+
+        try:
+            values = [
+                float(match.group(0).replace(",", ""))
+                for match in matches
+            ]
+        except (TypeError, ValueError):
+            return None
+
+        if len(values) == 2:
+            values.append(0.0)
+
+        x, y, z = values
+        if not all(math.isfinite(v) for v in (x, y, z)):
+            return None
+
+        return Position(x, y, z)
+
+    def _create_manual_coordinate_ping(self) -> None:
+        pos = self._parse_manual_ping_coordinate(
+            self.manual_ping_coord_var.get()
+        )
+        if pos is None:
+            messagebox.showwarning(
+                "Manual Ping",
+                "Tọa độ không hợp lệ.\n\n"
+                "Hỗ trợ XY hoặc XYZ theo format của game.\n"
+                "Ví dụ:\n"
+                "304,333.126, -310,414.508\n"
+                "hoặc\n"
+                "304,333.126, -310,414.508, 22,003.88"
+            )
+            return
+
+        duration_seconds = self._normalize_manual_ping_duration(save=True)
+        now = time.time()
+
+        self.manual_active_ping = {
+            "pos": pos,
+            "created_at": now,
+            "expires_at": now + duration_seconds,
+            "duration_seconds": duration_seconds,
+            # Keep duration_min for compatibility with older rendering/code.
+            "duration_min": duration_seconds / 60.0,
+        }
+
+        self._redraw()
+        self._apply_focus_visibility()
+
+    def _create_asset_location_ping(self, position: Position) -> None:
+        duration_seconds = self._get_manual_ping_duration_seconds()
+        now = time.time()
+        self.asset_location_active_ping = {
+            "pos": position,
+            "created_at": now,
+            "expires_at": now + duration_seconds,
+            "duration_seconds": duration_seconds,
+            "duration_min": duration_seconds / 60.0,
+        }
+        self._redraw()
+        self._apply_focus_visibility()
+
+    def _clear_asset_location_ping(self) -> None:
+        self.asset_location_active_ping = None
+        self._redraw()
+        self._apply_focus_visibility()
+
+    def _asset_location_ping_is_active(self) -> bool:
+        ping = getattr(self, "asset_location_active_ping", None)
+        if not ping:
+            return False
+        if self._ping_is_expired(ping):
+            self.asset_location_active_ping = None
+            return False
+        return True
+
+    def _clear_manual_ping(self) -> None:
+        self.manual_active_ping = None
+        self._redraw()
+        self._apply_focus_visibility()
+
+    def _manual_ping_is_active(self) -> bool:
+        ping = getattr(self, "manual_active_ping", None)
+        if not ping:
+            return False
+
+        if self._ping_is_expired(ping):
+            self.manual_active_ping = None
+            return False
+
+        return True
+
+    def _get_ping_duration_seconds(self) -> int:
+        hours = self._parse_hms_component(
+            self.ping_duration_hours_var.get()
+        )
+        minutes = self._parse_hms_component(
+            self.ping_duration_minutes_var.get()
+        )
+        seconds = self._parse_hms_component(
+            self.ping_duration_seconds_var.get()
+        )
+
+        total = hours * 3600 + minutes * 60 + seconds
+        # Minimum 1 second, maximum 6 hours.
+        return max(1, min(6 * 3600, total))
+
+    def _normalize_ping_duration(self, save: bool = False) -> int:
+        total = self._get_ping_duration_seconds()
+        hours, minutes, seconds = self._seconds_to_hms(total)
+
+        self.ping_duration_hours_var.set(str(hours))
+        self.ping_duration_minutes_var.set(str(minutes))
+        self.ping_duration_seconds_var.set(str(seconds))
+
+        if save:
+            try:
+                self._save_app_config()
+            except Exception:
+                pass
+
+        return total
 
     @staticmethod
     def _ping_is_expired(ping: dict | None, now: float | None = None) -> bool:
@@ -2045,14 +2544,16 @@ class MapApp:
         else: return
 
         wx, wy = self.profile.from_normalized(nx, ny)
-        duration_min = self._normalize_ping_duration(save=True)
+        duration_seconds = self._normalize_ping_duration(save=True)
         created_at = time.time()
         self.my_active_ping = {
             "pos": Position(wx, wy, 0.0),
             "time": created_at,
             "created_at": created_at,
-            "expires_at": created_at + duration_min * 60.0,
-            "duration_min": duration_min,
+            "expires_at": created_at + duration_seconds,
+            "duration_seconds": duration_seconds,
+            # Kept for compatibility with Party payload/server versions.
+            "duration_min": duration_seconds / 60.0,
         }
         self._redraw()
 
@@ -2117,6 +2618,9 @@ class MapApp:
     def _on_focus_mode_change(self) -> None:
         self._save_app_config()
         self._apply_focus_visibility()
+
+    def _on_asset_location_ping_toggle(self) -> None:
+        self._save_app_config()
 
     def _on_hud_toggle(self) -> None:
         self._save_app_config()
@@ -2459,6 +2963,20 @@ class MapApp:
             self._hud.update_map(self.source_image, self.profile, draw_position.x, draw_position.y, heading, zone_images=self._active_zone_images(), path_history=self.path_history, show_regions=self.show_regions_var.get(), shape=self.minimap_shape, teammates=self.teammates, map_app_ref=self)
 
     def _apply_focus_visibility(self) -> None:
+        if (
+            getattr(self, "manual_active_ping", None)
+            and self._ping_is_expired(self.manual_active_ping)
+        ):
+            self.manual_active_ping = None
+            self._redraw()
+
+        if (
+            getattr(self, "asset_location_active_ping", None)
+            and self._ping_is_expired(self.asset_location_active_ping)
+        ):
+            self.asset_location_active_ping = None
+            self._redraw()
+
         local_live = self._local_position_fresh()
         has_live_source = local_live or getattr(self, '_islepilot_online', False)
         focus_allowed = self._focus_allows_hud()
@@ -2502,7 +3020,9 @@ class MapApp:
                     self.current,
                     self._current_heading_degrees(),
                     self.teammates if self.is_party_active else {},
-                    self.my_active_ping
+                    self.my_active_ping,
+                    self.manual_active_ping,
+                    self.asset_location_active_ping
                 )
                 if count > 0:
                     ping_hud.show()
@@ -2602,16 +3122,38 @@ class MapApp:
 
     def _accept_clipboard(self, text: str) -> None:
         position = parse_coordinate(text)
-        if position is None: return
+        if position is None:
+            return
+
+        asset_mode = bool(
+            getattr(self, "asset_location_ping_enabled_var", None)
+            and self.asset_location_ping_enabled_var.get()
+        )
+
+        if asset_mode:
+            if position != self.current:
+                if self.current:
+                    self.path_history.append(self.current)
+                    if len(self.path_history) > MAX_HISTORY_POINTS:
+                        self.path_history.pop(0)
+                self.current = position
+                if not self._islepilot_connected() and not self._local_position_fresh():
+                    self._islepilot_heading_deg = None
+                    self._local_heading_deg = None
+
+            # IMPORTANT: create ping only; do not call _show_map().
+            self._create_asset_location_ping(position)
+            return
+
         if position == self.current:
             self._show_map()
             return
-            
+
         if self.current:
             self.path_history.append(self.current)
             if len(self.path_history) > MAX_HISTORY_POINTS:
                 self.path_history.pop(0)
-                
+
         self.current = position
         if not self._islepilot_connected() and not self._local_position_fresh():
             self._islepilot_heading_deg = None
@@ -2823,6 +3365,83 @@ class MapApp:
                 )
                 _draw_text_with_outline(canvas, label_x, label_y, "Ping bạn", 9, ACCENT_CYAN)
 
+        # Local-only coordinate ping.
+        if self._manual_ping_is_active():
+            manual_ping = self.manual_active_ping
+            mx, my = self._pixel(manual_ping["pos"], is_ingame)
+
+            if _point_in_rect(mx, my, overlay_clip_rect, 16.0):
+                canvas.create_rectangle(
+                    mx - 7, my - 7, mx + 7, my + 7,
+                    fill=ACCENT_RED,
+                    outline="#ffffff",
+                    width=1.5
+                )
+                canvas.create_oval(
+                    mx - 15, my - 15, mx + 15, my + 15,
+                    outline=ACCENT_RED,
+                    width=1.5,
+                    dash=(3, 3)
+                )
+
+                remain_seconds = max(
+                    0.0,
+                    float(manual_ping["expires_at"]) - time.time()
+                )
+                remain_minutes = remain_seconds / 60.0
+                manual_label = f"Manual Ping • {remain_minutes:.1f}m"
+
+                label_x, label_y = _clamp_text_to_rect(
+                    mx, my - 22, manual_label, 9,
+                    *overlay_clip_rect, padding=4.0
+                )
+                _draw_text_with_outline(
+                    canvas,
+                    label_x,
+                    label_y,
+                    manual_label,
+                    9,
+                    ACCENT_RED
+                )
+
+        if self._asset_location_ping_is_active():
+            asset_ping = self.asset_location_active_ping
+            ax, ay = self._pixel(asset_ping["pos"], is_ingame)
+
+            if _point_in_rect(ax, ay, overlay_clip_rect, 16.0):
+                canvas.create_polygon(
+                    ax, ay - 9,
+                    ax + 9, ay,
+                    ax, ay + 9,
+                    ax - 9, ay,
+                    fill="#000000",
+                    outline="#ffffff",
+                    width=1.5
+                )
+                canvas.create_oval(
+                    ax - 16, ay - 16, ax + 16, ay + 16,
+                    outline="#ffffff",
+                    width=1.5,
+                    dash=(3, 3)
+                )
+
+                remaining = max(
+                    0,
+                    int(float(asset_ping["expires_at"]) - time.time())
+                )
+                hh, rem = divmod(remaining, 3600)
+                mm, ss = divmod(rem, 60)
+                asset_label = f"Asset Ping • {hh:02d}:{mm:02d}:{ss:02d}"
+
+                label_x, label_y = _clamp_text_to_rect(
+                    ax, ay - 24, asset_label, 9,
+                    *overlay_clip_rect, padding=4.0
+                )
+                _draw_text_with_outline(
+                    canvas, label_x, label_y,
+                    asset_label, 9, "#000000", outline_color="#ffffff"
+                )
+
         # VẼ ĐỒNG ĐỘI
         if getattr(self, 'is_party_active', False) and getattr(self, 'teammates', None):
             try:
@@ -2974,6 +3593,90 @@ class MapApp:
             hitboxes[clear_key] = (x, y, x + chip_w, y + chip_h)
 
 
+        if self._manual_ping_is_active():
+            manual_key = "__clear_manual_ping__"
+            manual_text = "✕ MANUAL"
+            manual_color = "#8e44ad"
+
+            probe = canvas.create_text(
+                -10000, -10000,
+                text=manual_text,
+                font=("Segoe UI", 8, "bold"),
+                anchor="w"
+            )
+            bbox = canvas.bbox(probe)
+            canvas.delete(probe)
+
+            manual_chip_w = (
+                (bbox[2] - bbox[0]) + 20
+                if bbox else 85
+            )
+
+            if (
+                x + manual_chip_w > canvas_w - margin
+                and x > margin
+            ):
+                x = margin
+                y -= chip_h + gap
+
+            text_id = canvas.create_text(
+                x + 10,
+                y + chip_h / 2,
+                text=manual_text,
+                fill="#ffffff",
+                font=("Segoe UI", 8, "bold"),
+                anchor="w"
+            )
+
+            rect_id = canvas.create_rectangle(
+                x, y,
+                x + manual_chip_w, y + chip_h,
+                fill=manual_color,
+                outline="#c56cf0",
+                width=1.2
+            )
+            canvas.tag_lower(rect_id, text_id)
+
+            hitboxes[manual_key] = (
+                x, y,
+                x + manual_chip_w, y + chip_h
+            )
+            x += manual_chip_w + gap
+
+        if self._asset_location_ping_is_active():
+            asset_key = "__clear_asset_ping__"
+            asset_text = "✕ ASSET"
+            probe = canvas.create_text(
+                -10000, -10000,
+                text=asset_text,
+                font=("Segoe UI", 8, "bold"),
+                anchor="w"
+            )
+            bbox = canvas.bbox(probe)
+            canvas.delete(probe)
+            asset_chip_w = (bbox[2] - bbox[0]) + 20 if bbox else 82
+
+            if x + asset_chip_w > canvas_w - margin and x > margin:
+                x = margin
+                y -= chip_h + gap
+
+            text_id = canvas.create_text(
+                x + 10, y + chip_h / 2,
+                text=asset_text,
+                fill="#ffffff",
+                font=("Segoe UI", 8, "bold"),
+                anchor="w"
+            )
+            rect_id = canvas.create_rectangle(
+                x, y, x + asset_chip_w, y + chip_h,
+                fill=ACCENT_ORANGE,
+                outline="#ffffff",
+                width=1.2
+            )
+            canvas.tag_lower(rect_id, text_id)
+            hitboxes[asset_key] = (x, y, x + asset_chip_w, y + chip_h)
+            x += asset_chip_w + gap
+
         if is_ingame:
             self._ig_zone_toggle_hitboxes = hitboxes
         else:
@@ -3052,6 +3755,12 @@ class MapApp:
             if x1 <= event.x <= x2 and y1 <= event.y <= y2:
                 if key == "__clear_my_ping__":
                     self._clear_my_ping()
+                    return
+                if key == "__clear_manual_ping__":
+                    self._clear_manual_ping()
+                    return
+                if key == "__clear_asset_ping__":
+                    self._clear_asset_location_ping()
                     return
                 self._zone_visible[key] = not self._zone_visible[key]
                 self._redraw()
