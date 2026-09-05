@@ -232,7 +232,183 @@ def _draw_text_with_outline(canvas: tk.Canvas, x: float, y: float, text: str, fo
         canvas.create_text(x+dx, y+dy, text=text, fill=outline_color, font=font_spec, justify="center")
     canvas.create_text(x, y, text=text, fill=fill_color, font=font_spec, justify="center")
 
-def _draw_gateway_pois(canvas: tk.Canvas, profile: MapProfile, poi_data: dict, world_to_screen, *, hud: bool = False, visible: dict[str, bool] | None = None) -> None:
+
+def _estimate_text_half_size(text: str, font_size: int) -> tuple[float, float]:
+    """Approximate half-width/half-height for centered Segoe UI bold labels."""
+    lines = str(text).splitlines() or [""]
+    longest = max((len(line) for line in lines), default=1)
+    # Slightly conservative dimensions so outlined text stays inside the map.
+    half_w = max(4.0, longest * font_size * 0.34 + 3.0)
+    half_h = max(4.0, len(lines) * font_size * 0.62 + 3.0)
+    return half_w, half_h
+
+
+def _clamp_text_to_rect(
+    x: float,
+    y: float,
+    text: str,
+    font_size: int,
+    left: float,
+    top: float,
+    right: float,
+    bottom: float,
+    padding: float = 3.0,
+) -> tuple[float, float]:
+    """Keep the whole centered text label inside a rectangular map viewport."""
+    half_w, half_h = _estimate_text_half_size(text, font_size)
+
+    min_x = left + padding + half_w
+    max_x = right - padding - half_w
+    min_y = top + padding + half_h
+    max_y = bottom - padding - half_h
+
+    # Tiny view fallback.
+    if min_x > max_x:
+        x = (left + right) / 2.0
+    else:
+        x = max(min_x, min(max_x, x))
+
+    if min_y > max_y:
+        y = (top + bottom) / 2.0
+    else:
+        y = max(min_y, min(max_y, y))
+
+    return x, y
+
+
+def _clamp_text_to_circle(
+    x: float,
+    y: float,
+    text: str,
+    font_size: int,
+    cx: float,
+    cy: float,
+    radius: float,
+    padding: float = 4.0,
+) -> tuple[float, float]:
+    """Keep the whole centered text label within a circular minimap."""
+    half_w, half_h = _estimate_text_half_size(text, font_size)
+
+    safe_rx = max(1.0, radius - padding - half_w)
+    safe_ry = max(1.0, radius - padding - half_h)
+
+    dx = x - cx
+    dy = y - cy
+    norm = (dx / safe_rx) ** 2 + (dy / safe_ry) ** 2
+
+    if norm > 1.0:
+        scale = 1.0 / math.sqrt(norm)
+        dx *= scale
+        dy *= scale
+
+    return cx + dx, cy + dy
+
+
+def _point_in_rect(x, y, rect, margin=0.0):
+    left, top, right, bottom = rect
+    return left + margin <= x <= right - margin and top + margin <= y <= bottom - margin
+
+
+def _point_in_circle(x, y, circle, margin=0.0):
+    cx, cy, radius = circle
+    radius = max(0.0, radius - margin)
+    return (x - cx) ** 2 + (y - cy) ** 2 <= radius ** 2
+
+
+def _clip_segment_rect(x1, y1, x2, y2, rect):
+    left, top, right, bottom = rect
+    dx, dy = x2 - x1, y2 - y1
+    p = (-dx, dx, -dy, dy)
+    q = (x1 - left, right - x1, y1 - top, bottom - y1)
+    u1, u2 = 0.0, 1.0
+
+    for pi, qi in zip(p, q):
+        if abs(pi) < 1e-12:
+            if qi < 0:
+                return None
+            continue
+        t = qi / pi
+        if pi < 0:
+            if t > u2:
+                return None
+            u1 = max(u1, t)
+        else:
+            if t < u1:
+                return None
+            u2 = min(u2, t)
+
+    return (
+        x1 + u1 * dx, y1 + u1 * dy,
+        x1 + u2 * dx, y1 + u2 * dy,
+    )
+
+
+def _clip_segment_circle(x1, y1, x2, y2, circle):
+    cx, cy, radius = circle
+    dx, dy = x2 - x1, y2 - y1
+    fx, fy = x1 - cx, y1 - cy
+    a = dx * dx + dy * dy
+
+    if a <= 1e-12:
+        return (x1, y1, x2, y2) if _point_in_circle(x1, y1, circle) else None
+
+    b = 2.0 * (fx * dx + fy * dy)
+    c = fx * fx + fy * fy - radius * radius
+    disc = b * b - 4.0 * a * c
+
+    ts = [0.0, 1.0]
+    if disc >= 0:
+        root = math.sqrt(max(0.0, disc))
+        for t in ((-b - root) / (2.0 * a), (-b + root) / (2.0 * a)):
+            if 0.0 < t < 1.0:
+                ts.append(t)
+
+    ts = sorted(set(ts))
+    inside = []
+    for ta, tb in zip(ts, ts[1:]):
+        tm = (ta + tb) / 2.0
+        mx, my = x1 + tm * dx, y1 + tm * dy
+        if _point_in_circle(mx, my, circle):
+            inside.append((ta, tb))
+
+    if not inside:
+        return None
+
+    ta, tb = inside[0][0], inside[-1][1]
+    return (
+        x1 + ta * dx, y1 + ta * dy,
+        x1 + tb * dx, y1 + tb * dy,
+    )
+
+
+def _draw_clipped_polyline(canvas, points, *, fill, width, clip_rect=None, clip_circle=None, dash=None):
+    if len(points) < 2:
+        return
+
+    for (x1, y1), (x2, y2) in zip(points, points[1:]):
+        segment = (x1, y1, x2, y2)
+
+        if clip_rect is not None:
+            segment = _clip_segment_rect(*segment, clip_rect)
+            if segment is None:
+                continue
+
+        if clip_circle is not None:
+            segment = _clip_segment_circle(*segment, clip_circle)
+            if segment is None:
+                continue
+
+        canvas.create_line(
+            *segment,
+            fill=fill,
+            width=width,
+            capstyle="round",
+            joinstyle="round",
+            dash=dash,
+        )
+
+
+def _draw_gateway_pois(canvas: tk.Canvas, profile: MapProfile, poi_data: dict, world_to_screen, *, hud: bool = False, visible: dict[str, bool] | None = None, clip_rect=None, clip_circle=None) -> None:
     """Draw ONLY the extra JSON POIs; existing map/layers remain untouched."""
     if not poi_data:
         return
@@ -246,12 +422,21 @@ def _draw_gateway_pois(canvas: tk.Canvas, profile: MapProfile, poi_data: dict, w
     def pt(x: float, y: float) -> tuple[float, float]:
         return world_to_screen(Position(float(x), float(y), 0.0))
 
+    def point_visible(sx, sy, margin=0.0):
+        if clip_rect is not None and not _point_in_rect(sx, sy, clip_rect, margin):
+            return False
+        if clip_circle is not None and not _point_in_circle(sx, sy, clip_circle, margin):
+            return False
+        return True
+
     # Sanctuary: same diamond icon style as Salt, but with its own color.
     if show_sanctuaries:
         sanctuary_color = POI_COLORS["sanctuaries"]
         sanctuary_size = 4 if hud else 6
         for item in poi_data.get("sanctuaries", []):
             sx, sy = pt(item.get("x", 0.0), item.get("y", 0.0))
+            if not point_visible(sx, sy, sanctuary_size + 1):
+                continue
             canvas.create_polygon(
                 sx, sy-sanctuary_size, sx+sanctuary_size, sy,
                 sx, sy+sanctuary_size, sx-sanctuary_size, sy,
@@ -265,32 +450,36 @@ def _draw_gateway_pois(canvas: tk.Canvas, profile: MapProfile, poi_data: dict, w
             kind = str(item.get("kind", "")).lower()
             polyline = item.get("polyline") or []
             if polyline and kind in {"path", "line"}:
-                coords = []
+                screen_points = []
                 for pair in polyline:
                     if isinstance(pair, (list, tuple)) and len(pair) >= 2:
-                        sx, sy = pt(pair[0], pair[1])
-                        coords.extend((sx, sy))
-                if len(coords) >= 4:
-                    canvas.create_line(
-                        *coords, fill=color, width=2.4 if not hud else 1.7,
-                        joinstyle="round", capstyle="round"
-                    )
+                        screen_points.append(pt(pair[0], pair[1]))
+                _draw_clipped_polyline(
+                    canvas, screen_points,
+                    fill=color,
+                    width=2.4 if not hud else 1.7,
+                    clip_rect=clip_rect,
+                    clip_circle=clip_circle,
+                )
             else:
                 radii = item.get("radii") or {}
                 rx = float(radii.get("rx", 8.0)) * POI_RADIUS_WORLD_SCALE
                 ry = float(radii.get("ry", radii.get("rx", 8.0))) * POI_RADIUS_WORLD_SCALE
                 rot = math.radians(float(radii.get("rot", 0.0)))
                 cx, cy = float(item.get("x", 0.0)), float(item.get("y", 0.0))
-                coords = []
+                screen_points = []
                 for i in range(49):
                     a = (i / 48.0) * math.tau
                     lx, ly = math.cos(a) * rx, math.sin(a) * ry
                     wx = cx + lx * math.cos(rot) - ly * math.sin(rot)
                     wy = cy + lx * math.sin(rot) + ly * math.cos(rot)
-                    sx, sy = pt(wx, wy)
-                    coords.extend((sx, sy))
-                canvas.create_line(
-                    *coords, fill=color, width=2.4 if not hud else 1.7, smooth=True
+                    screen_points.append(pt(wx, wy))
+                _draw_clipped_polyline(
+                    canvas, screen_points,
+                    fill=color,
+                    width=2.4 if not hud else 1.7,
+                    clip_rect=clip_rect,
+                    clip_circle=clip_circle,
                 )
 
     # Patrol Zones: some JSON entries contain several closed sub-paths in one
@@ -354,31 +543,33 @@ def _draw_gateway_pois(canvas: tk.Canvas, profile: MapProfile, poi_data: dict, w
             polyline = item.get("polyline") or []
             if polyline and kind in {"path", "line"}:
                 for segment in split_patrol_polyline(polyline):
-                    coords = []
-                    for wx, wy in segment:
-                        sx, sy = pt(wx, wy)
-                        coords.extend((sx, sy))
-                    if len(coords) >= 4:
-                        canvas.create_line(
-                            *coords, fill=color, width=2.2 if not hud else 1.6,
-                            joinstyle="round", capstyle="round"
-                        )
+                    screen_points = [pt(wx, wy) for wx, wy in segment]
+                    _draw_clipped_polyline(
+                        canvas, screen_points,
+                        fill=color,
+                        width=2.2 if not hud else 1.6,
+                        clip_rect=clip_rect,
+                        clip_circle=clip_circle,
+                    )
             else:
                 radii = item.get("radii") or {}
                 rx = float(radii.get("rx", 8.0)) * POI_RADIUS_WORLD_SCALE
                 ry = float(radii.get("ry", radii.get("rx", 8.0))) * POI_RADIUS_WORLD_SCALE
                 rot = math.radians(float(radii.get("rot", 0.0)))
                 cx, cy = float(item.get("x", 0.0)), float(item.get("y", 0.0))
-                coords = []
+                screen_points = []
                 for i in range(49):
                     a = (i / 48.0) * math.tau
                     lx, ly = math.cos(a) * rx, math.sin(a) * ry
                     wx = cx + lx * math.cos(rot) - ly * math.sin(rot)
                     wy = cy + lx * math.sin(rot) + ly * math.cos(rot)
-                    sx, sy = pt(wx, wy)
-                    coords.extend((sx, sy))
-                canvas.create_line(
-                    *coords, fill=color, width=2.2 if not hud else 1.6, smooth=True
+                    screen_points.append(pt(wx, wy))
+                _draw_clipped_polyline(
+                    canvas, screen_points,
+                    fill=color,
+                    width=2.2 if not hud else 1.6,
+                    clip_rect=clip_rect,
+                    clip_circle=clip_circle,
                 )
 
     # Salt: small diamond markers and obey toggle.
@@ -387,6 +578,8 @@ def _draw_gateway_pois(canvas: tk.Canvas, profile: MapProfile, poi_data: dict, w
         salt_size = 4 if hud else 6
         for item in poi_data.get("salt_licks", []):
             sx, sy = pt(item.get("x", 0.0), item.get("y", 0.0))
+            if not point_visible(sx, sy, salt_size + 1):
+                continue
             canvas.create_polygon(
                 sx, sy-salt_size, sx+salt_size, sy,
                 sx, sy+salt_size, sx-salt_size, sy,
@@ -606,6 +799,15 @@ class MiniMapPanel:
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
 
         center = MINI_MAP_SIZE / 2
+        hud_clip_rect = (2.0, 2.0, MINI_MAP_SIZE - 2.0, MINI_MAP_SIZE - 2.0)
+        hud_clip_circle = (center, center, MINI_MAP_SIZE / 2.0 - 2.0) if shape == "Tròn" else None
+
+        def hud_point_visible(px, py, margin=0.0):
+            return (
+                _point_in_rect(px, py, hud_clip_rect, margin)
+                and (hud_clip_circle is None or _point_in_circle(px, py, hud_clip_circle, margin))
+            )
+
         self.canvas.create_line(center - 12, center, center + 12, center, fill="#ffffff", width=1)
         self.canvas.create_line(center, center - 12, center, center + 12, fill="#ffffff", width=1)
         self.canvas.create_oval(center - 24, center - 24, center + 24, center + 24, outline="#ffffff", width=0.8, dash=(2, 4))
@@ -619,7 +821,7 @@ class MiniMapPanel:
                     mnx, mny = profile.to_normalized(pos)
                     mx = (mnx - left) / frac * MINI_MAP_SIZE
                     my = (mny - top) / frac * MINI_MAP_SIZE
-                    if 0 <= mx <= MINI_MAP_SIZE and 0 <= my <= MINI_MAP_SIZE:
+                    if hud_point_visible(mx, my, 3.0):
                         self.canvas.create_oval(mx-2.5, my-2.5, mx+2.5, my+2.5, fill=color, outline="#000000", width=0.5)
         
         # ADD-ONLY: draw extra Gateway POIs on HUD; old markers/layers above are unchanged.
@@ -627,25 +829,69 @@ class MiniMapPanel:
             def _hud_world_to_screen(pos: Position) -> tuple[float, float]:
                 pnx, pny = profile.to_normalized(pos)
                 return ((pnx - left) / frac * MINI_MAP_SIZE, (pny - top) / frac * MINI_MAP_SIZE)
-            _draw_gateway_pois(self.canvas, profile, map_app_ref.gateway_pois, _hud_world_to_screen, hud=True, visible=getattr(map_app_ref, "_zone_visible", None))
+            _draw_gateway_pois(
+                self.canvas, profile, map_app_ref.gateway_pois, _hud_world_to_screen,
+                hud=True,
+                visible=getattr(map_app_ref, "_zone_visible", None),
+                clip_rect=hud_clip_rect,
+                clip_circle=hud_clip_circle,
+            )
 
         if path_history and len(path_history) > 0:
-            points = []
+            trail_points = []
             for pos in path_history + [Position(x, y, 0.0)]:
                 hnx, hny = profile.to_normalized(pos)
-                hx = (hnx - left) / frac * MINI_MAP_SIZE
-                hy = (hny - top) / frac * MINI_MAP_SIZE
-                points.extend((hx, hy))
-            if len(points) >= 4:
-                self.canvas.create_line(*points, fill=ACCENT_CYAN, width=2, joinstyle="round", capstyle="round")
+                trail_points.append((
+                    (hnx - left) / frac * MINI_MAP_SIZE,
+                    (hny - top) / frac * MINI_MAP_SIZE
+                ))
+            _draw_clipped_polyline(
+                self.canvas, trail_points,
+                fill=ACCENT_CYAN,
+                width=2,
+                clip_rect=hud_clip_rect,
+                clip_circle=hud_clip_circle,
+            )
 
         if show_regions and MAP_LABELS:
+            label_font_size = 8
+            label_pad = 4.0
+            mini_center = MINI_MAP_SIZE / 2.0
+            mini_radius = MINI_MAP_SIZE / 2.0 - 2.0
+
             for name, pos, color, size in MAP_LABELS:
                 r_nx, r_ny = profile.to_normalized(pos)
                 rx = (r_nx - left) / frac * MINI_MAP_SIZE
                 ry = (r_ny - top) / frac * MINI_MAP_SIZE
-                if -20 <= rx <= MINI_MAP_SIZE + 20 and -20 <= ry <= MINI_MAP_SIZE + 20:
-                    _draw_text_with_outline(self.canvas, rx, ry, name, 8, color)
+
+                # Do not pull labels from outside the current crop onto an edge.
+                if not (0.0 <= rx <= MINI_MAP_SIZE and 0.0 <= ry <= MINI_MAP_SIZE):
+                    continue
+
+                if shape == "Tròn":
+                    # The source point must actually be visible inside the round HUD.
+                    dx = rx - mini_center
+                    dy = ry - mini_center
+                    if dx * dx + dy * dy > mini_radius * mini_radius:
+                        continue
+
+                    draw_x, draw_y = _clamp_text_to_circle(
+                        rx, ry, name, label_font_size,
+                        mini_center, mini_center, mini_radius,
+                        padding=label_pad
+                    )
+                else:
+                    draw_x, draw_y = _clamp_text_to_rect(
+                        rx, ry, name, label_font_size,
+                        2.0, 2.0,
+                        MINI_MAP_SIZE - 2.0, MINI_MAP_SIZE - 2.0,
+                        padding=label_pad
+                    )
+
+                _draw_text_with_outline(
+                    self.canvas, draw_x, draw_y,
+                    name, label_font_size, color
+                )
 
         border_col = ACCENT_RED if self.is_movable else HUD_BORDER_ACTIVE
         if shape == "Tròn":
@@ -669,11 +915,25 @@ class MiniMapPanel:
                     tnx, tny = profile.to_normalized(tdata["pos"])
                     hx = (tnx - left) / frac * MINI_MAP_SIZE
                     hy = (tny - top) / frac * MINI_MAP_SIZE
-                    _draw_heading_polygon(self.canvas, hx, hy, tdata["yaw"], 10, ACCENT_GREEN)
+                    if hud_point_visible(hx, hy, 12.0):
+                        _draw_heading_polygon(self.canvas, hx, hy, tdata["yaw"], 10, ACCENT_GREEN)
             except Exception: pass
 
-        marker_x = max(0.0, min(float(MINI_MAP_SIZE), (nx - left) / frac * MINI_MAP_SIZE))
-        marker_y = max(0.0, min(float(MINI_MAP_SIZE), (ny - top) / frac * MINI_MAP_SIZE))
+        marker_x = (nx - left) / frac * MINI_MAP_SIZE
+        marker_y = (ny - top) / frac * MINI_MAP_SIZE
+
+        if hud_clip_circle is not None:
+            cx, cy, radius = hud_clip_circle
+            dx, dy = marker_x - cx, marker_y - cy
+            safe_radius = max(1.0, radius - 13.0)
+            dist = math.hypot(dx, dy)
+            if dist > safe_radius and dist > 0:
+                marker_x = cx + dx * safe_radius / dist
+                marker_y = cy + dy * safe_radius / dist
+        else:
+            marker_x = max(15.0, min(MINI_MAP_SIZE - 15.0, marker_x))
+            marker_y = max(15.0, min(MINI_MAP_SIZE - 15.0, marker_y))
+
         _draw_heading_polygon(self.canvas, marker_x, marker_y, heading_deg, 11, ACCENT_RED)
 
     def destroy(self) -> None: self.window.destroy()
@@ -787,6 +1047,113 @@ class QuestPanel:
                 name.configure(text="")
     def destroy(self) -> None: self.window.destroy()
 
+
+# ==================== DIRECTIONAL PING HUD ====================
+class PingDirectionOverlay:
+    EDGE_MARGIN_X = 115
+    EDGE_MARGIN_Y = 90
+
+    def __init__(self, root: tk.Tk, opacity: float = 1.0):
+        self.root = root
+        self.window = tk.Toplevel(root)
+        self.window.overrideredirect(True)
+        self.window.attributes("-topmost", True)
+        self.window.attributes("-alpha", opacity)
+        self.window.configure(bg="#000001")
+        self.window.attributes("-transparentcolor", "#000001")
+        sw = max(1, root.winfo_screenwidth())
+        sh = max(1, root.winfo_screenheight())
+        self.window.geometry(f"{sw}x{sh}+0+0")
+        self.canvas = tk.Canvas(self.window, width=sw, height=sh, background="#000001", highlightthickness=0, bd=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.window.update_idletasks()
+        self._set_clickthrough()
+        self.hide()
+
+    def _set_clickthrough(self) -> None:
+        try:
+            self.window.update_idletasks()
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetAncestor(self.window.winfo_id(), 2)
+            if not hwnd: hwnd = self.window.winfo_id()
+            style = user32.GetWindowLongW(hwnd, -20)
+            style |= 0x00000020 | 0x00080000 | 0x08000000 | 0x00000080
+            user32.SetWindowLongW(hwnd, -20, style)
+        except Exception:
+            pass
+
+    def show(self) -> None: self.window.deiconify()
+    def hide(self) -> None:
+        self.canvas.delete("all")
+        self.window.withdraw()
+
+    @staticmethod
+    def _distance_meters(a: Position, b: Position) -> float:
+        return math.hypot(b.x-a.x, b.y-a.y) / 100.0
+
+    @staticmethod
+    def _map_bearing(profile: MapProfile, origin: Position, target: Position) -> float:
+        ox, oy = profile.to_normalized(origin)
+        tx, ty = profile.to_normalized(target)
+        return math.degrees(math.atan2(tx-ox, -(ty-oy))) % 360.0
+
+    def _draw_one(self, profile: MapProfile, player_pos: Position, heading: float, ping_pos: Position, label: str, color: str, index: int) -> None:
+        sw = max(self.canvas.winfo_width(), self.root.winfo_screenwidth(), 1)
+        sh = max(self.canvas.winfo_height(), self.root.winfo_screenheight(), 1)
+        cx, cy = sw/2.0, sh/2.0
+        bearing = self._map_bearing(profile, player_pos, ping_pos)
+        relative = (bearing-heading+180.0) % 360.0 - 180.0
+        theta = math.radians(relative)
+        rx = max(80.0, cx-self.EDGE_MARGIN_X)
+        ry = max(70.0, cy-self.EDGE_MARGIN_Y)
+        px = cx + math.sin(theta)*rx
+        py = cy - math.cos(theta)*ry
+        if index:
+            px += math.cos(theta) * (((index % 3)-1)*24.0)
+            py += math.sin(theta) * (((index % 3)-1)*24.0)
+        dist = self._distance_meters(player_pos, ping_pos)
+        dist_text = f"{dist/1000.0:.1f} km" if dist >= 1000 else f"{int(round(dist))} m"
+        ux, uy = math.sin(theta), -math.cos(theta)
+        txv, tyv = math.cos(theta), math.sin(theta)
+        tipx, tipy = px+ux*17, py+uy*17
+        basex, basey = px-ux*7, py-uy*7
+        self.canvas.create_polygon(tipx,tipy, basex+txv*8,basey+tyv*8, basex-txv*8,basey-tyv*8, fill=color, outline="#ffffff", width=1.2, joinstyle="round")
+        _draw_text_with_outline(self.canvas, px-ux*34, py-uy*34, f"{label}  •  {dist_text}", 10, color, outline_color="#05070a")
+
+    def update(self, profile: MapProfile, player_pos: Position | None, player_heading: float | None, teammates: dict | None, my_ping: dict | None = None) -> int:
+        self.canvas.delete("all")
+        if player_pos is None or player_heading is None: return 0
+        entries = []
+        if teammates:
+            for _tid, tdata in teammates.items():
+                ping = tdata.get("ping")
+                if not ping: continue
+                expires_at = ping.get("expires_at") if isinstance(ping, dict) else None
+                if expires_at is not None:
+                    try:
+                        if float(expires_at) <= time.time():
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                try: p = Position(float(ping["x"]), float(ping["y"]), 0.0)
+                except (KeyError, TypeError, ValueError): continue
+                entries.append((p, str(tdata.get("name") or "Đồng đội"), ACCENT_YELLOW))
+        if my_ping and isinstance(my_ping.get("pos"), Position):
+            expires_at = my_ping.get("expires_at")
+            expired = False
+            if expires_at is not None:
+                try:
+                    expired = float(expires_at) <= time.time()
+                except (TypeError, ValueError):
+                    expired = False
+            if not expired:
+                entries.append((my_ping["pos"], "Ping bạn", ACCENT_CYAN))
+        for i,(p,label,color) in enumerate(entries): self._draw_one(profile, player_pos, float(player_heading), p, label, color, i)
+        return len(entries)
+
+    def destroy(self) -> None: self.window.destroy()
+
+
 class IslePilotHud:
     def __init__(self, root: tk.Tk, opacity: float = 1.0):
         self.minimap = MiniMapPanel(root, opacity)
@@ -855,6 +1222,7 @@ class MapApp:
         
         self.show_teammate_vitals_map_var = ctk.BooleanVar(value=True)
         self.show_teammate_vitals_menu_var = ctk.BooleanVar(value=True)
+        self.ping_duration_minutes_var = ctk.StringVar(value="2")
         
         self.profiles = load_profiles()
         self.profile = self._load_app_config()
@@ -924,6 +1292,7 @@ class MapApp:
         self._islepilot_online = False
         self._islepilot_logging_in = False
         self._hud: IslePilotHud | None = None
+        self._ping_direction_hud = PingDirectionOverlay(self.root, opacity=self.minimap_opacity)
 
         self._local_session: localtelemetry.LocalMovementSession | None = None
         self._local_state = "starting"
@@ -1191,6 +1560,12 @@ class MapApp:
                 self.show_quests_var.set(data.get("show_quests", True))
                 self.show_teammate_vitals_map_var.set(data.get("show_teammate_vitals_map", True))
                 self.show_teammate_vitals_menu_var.set(data.get("show_teammate_vitals_menu", True))
+                try:
+                    saved_ping_minutes = float(data.get("ping_duration_minutes", 2))
+                    saved_ping_minutes = max(0.1, min(60.0, saved_ping_minutes))
+                    self.ping_duration_minutes_var.set(f"{saved_ping_minutes:g}")
+                except (TypeError, ValueError):
+                    self.ping_duration_minutes_var.set("2")
             except (json.JSONDecodeError, OSError): pass
         return next((p for p in self.profiles if p.profile_id == selected_map), self.profiles[0])
 
@@ -1208,7 +1583,8 @@ class MapApp:
             "show_vitals": self.show_vitals_var.get(),
             "show_quests": self.show_quests_var.get(),
             "show_teammate_vitals_map": self.show_teammate_vitals_map_var.get(),
-            "show_teammate_vitals_menu": self.show_teammate_vitals_menu_var.get()
+            "show_teammate_vitals_menu": self.show_teammate_vitals_menu_var.get(),
+            "ping_duration_minutes": self._get_ping_duration_minutes()
         }, indent=2), encoding="utf-8")
 
     def _build_ui(self) -> None:
@@ -1325,6 +1701,24 @@ class MapApp:
         party_opts.pack(fill="x", padx=10, pady=(2, 4))
         ctk.CTkCheckBox(party_opts, text="Chỉ số trên Map", variable=self.show_teammate_vitals_map_var, command=lambda: (self._save_app_config(), self._redraw()), checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=10)).pack(side="left")
         ctk.CTkCheckBox(party_opts, text="Chỉ số trên Menu", variable=self.show_teammate_vitals_menu_var, command=lambda: (self._save_app_config(), self._update_teammates_ui()), checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=10)).pack(side="right")
+
+        ping_opts = ctk.CTkFrame(card_party, fg_color="transparent")
+        ping_opts.pack(fill="x", padx=10, pady=(0, 5))
+        ctk.CTkLabel(
+            ping_opts, text="Thời gian Ping (phút):",
+            text_color=TEXT_MUTED, font=ctk.CTkFont(size=10)
+        ).pack(side="left")
+        self.entry_ping_duration = ctk.CTkEntry(
+            ping_opts, textvariable=self.ping_duration_minutes_var,
+            width=58, height=25, justify="center"
+        )
+        self.entry_ping_duration.pack(side="left", padx=(6, 4))
+        ctk.CTkLabel(
+            ping_opts, text="0.1 – 60",
+            text_color="#57606f", font=ctk.CTkFont(size=9)
+        ).pack(side="left")
+        self.entry_ping_duration.bind("<FocusOut>", lambda _e: self._normalize_ping_duration(save=True))
+        self.entry_ping_duration.bind("<Return>", lambda _e: self._normalize_ping_duration(save=True))
 
         self.teammates_panel = ctk.CTkFrame(card_party, fg_color="#0c1015", corner_radius=6)
         self.teammates_panel.pack(fill="x", padx=10, pady=(2, 8))
@@ -1455,6 +1849,54 @@ class MapApp:
             self.entry_api.configure(state="disabled")
             threading.Thread(target=self._party_sync_loop, daemon=True).start()
 
+    def _get_ping_duration_minutes(self) -> float:
+        try:
+            value = float(str(self.ping_duration_minutes_var.get()).strip().replace(",", "."))
+        except (TypeError, ValueError):
+            value = 2.0
+        return max(0.1, min(60.0, value))
+
+    def _normalize_ping_duration(self, save: bool = False) -> float:
+        value = self._get_ping_duration_minutes()
+        self.ping_duration_minutes_var.set(f"{value:g}")
+        if save:
+            try:
+                self._save_app_config()
+            except Exception:
+                pass
+        return value
+
+    @staticmethod
+    def _ping_is_expired(ping: dict | None, now: float | None = None) -> bool:
+        if not ping:
+            return True
+        expires_at = ping.get("expires_at") if isinstance(ping, dict) else None
+        if expires_at is None:
+            return False
+        try:
+            return float(expires_at) <= (time.time() if now is None else now)
+        except (TypeError, ValueError):
+            return False
+
+    def _clear_my_ping(self) -> None:
+        if self.my_active_ping is None:
+            return
+        self.my_active_ping = None
+        self._redraw()
+        ping_hud = getattr(self, "_ping_direction_hud", None)
+        if ping_hud is not None:
+            try:
+                ping_hud.update(
+                    self.profile,
+                    self.current,
+                    self._current_heading_degrees(),
+                    self.teammates if self.is_party_active else {},
+                    None,
+                )
+            except Exception:
+                pass
+
+
     def _party_sync_loop(self):
         empty_room_counter = 0
         while self.is_party_active:
@@ -1463,15 +1905,18 @@ class MapApp:
             yaw = self._current_heading_degrees() or 0.0 if self.current else 0.0
 
             current_time = time.time()
-            if self.my_active_ping and current_time - self.my_active_ping["time"] > 7.0:
+            if self.my_active_ping and self._ping_is_expired(self.my_active_ping, current_time):
                 self.my_active_ping = None
                 self.root.after(0, self._redraw)
 
             ping_payload = None
             if self.my_active_ping:
                 ping_payload = {
-                    "x": self.my_active_ping["pos"].x, 
-                    "y": self.my_active_ping["pos"].y
+                    "x": self.my_active_ping["pos"].x,
+                    "y": self.my_active_ping["pos"].y,
+                    "created_at": self.my_active_ping.get("created_at", self.my_active_ping.get("time", current_time)),
+                    "expires_at": self.my_active_ping.get("expires_at"),
+                    "duration_min": self.my_active_ping.get("duration_min"),
                 }
 
             payload = {
@@ -1494,11 +1939,14 @@ class MapApp:
                     valid_teammates = {}
                     for t in data:
                         has_pos = (t["x"] != 999999.0 and t["y"] != 999999.0)
+                        teammate_ping = t.get("ping")
+                        if teammate_ping and self._ping_is_expired(teammate_ping, current_time):
+                            teammate_ping = None
                         valid_teammates[t["id"]] = {
                             "name": t.get("name", t["id"]),
                             "pos": Position(t["y"], t["x"], 0.0) if has_pos else None, 
                             "yaw": t["yaw"],
-                            "ping": t.get("ping"),
+                            "ping": teammate_ping,
                             "vitals": t.get("vitals"),
                             "has_pos": has_pos
                         }
@@ -1541,7 +1989,15 @@ class MapApp:
         else: return
 
         wx, wy = self.profile.from_normalized(nx, ny)
-        self.my_active_ping = {"pos": Position(wx, wy, 0.0), "time": time.time()}
+        duration_min = self._normalize_ping_duration(save=True)
+        created_at = time.time()
+        self.my_active_ping = {
+            "pos": Position(wx, wy, 0.0),
+            "time": created_at,
+            "created_at": created_at,
+            "expires_at": created_at + duration_min * 60.0,
+            "duration_min": duration_min,
+        }
         self._redraw()
 
     def _update_statuses(self):
@@ -1931,13 +2387,25 @@ class MapApp:
             self._hud.update_map(self.source_image, self.profile, draw_position.x, draw_position.y, heading, zone_images=self._active_zone_images(), path_history=self.path_history, show_regions=self.show_regions_var.get(), shape=self.minimap_shape, teammates=self.teammates, map_app_ref=self)
 
     def _poll_hud_visibility(self) -> None:
+        local_live = self._local_position_fresh()
+        has_live_source = local_live or getattr(self, '_islepilot_online', False)
+        game_foreground = self._is_game_foreground()
+
         if getattr(self, '_hud', None) is not None:
-            local_live = self._local_position_fresh()
-            has_live_source = local_live or getattr(self, '_islepilot_online', False)
-            if has_live_source and self._is_game_foreground():
+            if has_live_source and game_foreground:
                 self._hud.show(show_minimap=self.show_minimap_var.get(), show_vitals=self.show_vitals_var.get(), show_quests=self.show_quests_var.get() and getattr(self, '_islepilot_online', False))
-            else: 
+            else:
                 self._hud.hide()
+
+        ping_hud = getattr(self, '_ping_direction_hud', None)
+        if ping_hud is not None:
+            if has_live_source and game_foreground and self.current is not None:
+                count = ping_hud.update(self.profile, self.current, self._current_heading_degrees(), self.teammates if self.is_party_active else {}, self.my_active_ping)
+                if count > 0: ping_hud.show()
+                else: ping_hud.hide()
+            else:
+                ping_hud.hide()
+
         self.root.after(FOREGROUND_POLL_MS, self._poll_hud_visibility)
 
     def _check_for_update(self) -> None:
@@ -2110,6 +2578,25 @@ class MapApp:
             canvas.create_text(c_w / 2, c_h / 2, text=f"{self.profile.name}\nChưa có ảnh map", fill="#8395a7", font=("Segoe UI", 14, "bold"), justify="center")
 
         self._draw_zone_toggles_on(canvas, is_ingame)
+
+        # Exact map-image viewport for all world-space overlays.
+        if getattr(self, 'source_image', None):
+            overlay_clip_rect = (
+                float(x_offset),
+                float(y_offset),
+                float(x_offset + draw_w),
+                float(y_offset + draw_h),
+            )
+        else:
+            _rect = self.ig_placeholder_rect if is_ingame else self.m_placeholder_rect
+            if _rect is not None:
+                _l, _t, _w, _h = _rect
+                overlay_clip_rect = (
+                    float(_l), float(_t),
+                    float(_l + _w), float(_t + _h),
+                )
+            else:
+                overlay_clip_rect = (0.0, 0.0, float(c_w), float(c_h))
         
         # VẼ ANIMALS & HERBS TRÊN MAP LỚN (Áp dụng Position chuẩn)
         if getattr(self, 'local_markers', None):
@@ -2119,40 +2606,83 @@ class MapApp:
                     color = self.overlay_colors.get(key, "#ffffff")
                     pos = Position(item.get("x", 0.0), item.get("y", 0.0), 0.0)
                     px, py = self._pixel(pos, is_ingame)
-                    if -10 <= px <= c_w + 10 and -10 <= py <= c_h + 10:
+                    if _point_in_rect(px, py, overlay_clip_rect, 4.5):
                         canvas.create_oval(px-3.5, py-3.5, px+3.5, py+3.5, fill=color, outline="#000000", width=0.8)
 
         # ADD-ONLY: draw extra Gateway POIs on the large menu/in-game map.
         if getattr(self, "gateway_pois", None):
-            _draw_gateway_pois(canvas, self.profile, self.gateway_pois, lambda pos: self._pixel(pos, is_ingame), hud=False, visible=self._zone_visible)
+            _draw_gateway_pois(
+                canvas, self.profile, self.gateway_pois,
+                lambda pos: self._pixel(pos, is_ingame),
+                hud=False,
+                visible=self._zone_visible,
+                clip_rect=overlay_clip_rect,
+            )
 
         if self.show_regions_var.get() and MAP_LABELS:
+            # Labels must stay inside the ACTUAL rendered map image, not merely
+            # inside the Tk canvas (the canvas can contain letterbox margins).
+            label_left, label_top, label_right, label_bottom = overlay_clip_rect
+
             for name, pos, color, size in MAP_LABELS:
                 x, y = self._pixel(pos, is_ingame)
-                _draw_text_with_outline(canvas, x + TEXT_OFFSET_X, y + TEXT_OFFSET_Y, name, size, color)
+                raw_x = x + TEXT_OFFSET_X
+                raw_y = y + TEXT_OFFSET_Y
+
+                # Do not move labels from outside the current zoomed viewport
+                # onto the edge. Only labels whose anchor is truly visible draw.
+                if not (
+                    label_left <= raw_x <= label_right
+                    and label_top <= raw_y <= label_bottom
+                ):
+                    continue
+
+                draw_x, draw_y = _clamp_text_to_rect(
+                    raw_x, raw_y, name, size,
+                    label_left, label_top,
+                    label_right, label_bottom,
+                    padding=5.0
+                )
+                _draw_text_with_outline(
+                    canvas, draw_x, draw_y,
+                    name, size, color
+                )
 
         positions = getattr(self, 'path_history', []) + ([self.current] if self.current else [])
         if len(positions) >= 2:
-            points = []
-            for position in positions:
-                x, y = self._pixel(position, is_ingame)
-                points.extend((x, y))
-            canvas.create_line(*points, fill=ACCENT_CYAN, width=2.5, joinstyle="round", capstyle="round")
+            trail_points = [self._pixel(position, is_ingame) for position in positions]
+            _draw_clipped_polyline(
+                canvas, trail_points,
+                fill=ACCENT_CYAN,
+                width=2.5,
+                clip_rect=overlay_clip_rect,
+            )
 
         # VẼ PING
         if getattr(self, 'is_party_active', False) and getattr(self, 'teammates', None):
             for tid, tdata in self.teammates.items():
-                if tdata.get("ping"):
-                    px, py = self._pixel(Position(tdata["ping"]["x"], tdata["ping"]["y"], 0.0), is_ingame)
-                    canvas.create_oval(px-8, py-8, px+8, py+8, fill=ACCENT_YELLOW, outline="white", width=1.5)
-                    canvas.create_oval(px-15, py-15, px+15, py+15, outline=ACCENT_YELLOW, width=1.5, dash=(3, 3))
-                    _draw_text_with_outline(canvas, px, py - 22, f"{tdata['name']}", 9, ACCENT_YELLOW)
+                ping = tdata.get("ping")
+                if ping and not self._ping_is_expired(ping):
+                    px, py = self._pixel(Position(ping["x"], ping["y"], 0.0), is_ingame)
+                    if _point_in_rect(px, py, overlay_clip_rect, 16.0):
+                        canvas.create_oval(px-8, py-8, px+8, py+8, fill=ACCENT_YELLOW, outline="white", width=1.5)
+                        canvas.create_oval(px-15, py-15, px+15, py+15, outline=ACCENT_YELLOW, width=1.5, dash=(3, 3))
+                        label_x, label_y = _clamp_text_to_rect(
+                            px, py - 22, str(tdata["name"]), 9,
+                            *overlay_clip_rect, padding=4.0
+                        )
+                        _draw_text_with_outline(canvas, label_x, label_y, f"{tdata['name']}", 9, ACCENT_YELLOW)
 
-        if getattr(self, 'my_active_ping', None):
+        if getattr(self, 'my_active_ping', None) and not self._ping_is_expired(self.my_active_ping):
             px, py = self._pixel(self.my_active_ping["pos"], is_ingame)
-            canvas.create_oval(px-8, py-8, px+8, py+8, fill=ACCENT_CYAN, outline="white", width=1.5)
-            canvas.create_oval(px-15, py-15, px+15, py+15, outline=ACCENT_CYAN, width=1.5, dash=(3, 3))
-            _draw_text_with_outline(canvas, px, py - 22, "Ping bạn", 9, ACCENT_CYAN)
+            if _point_in_rect(px, py, overlay_clip_rect, 16.0):
+                canvas.create_oval(px-8, py-8, px+8, py+8, fill=ACCENT_CYAN, outline="white", width=1.5)
+                canvas.create_oval(px-15, py-15, px+15, py+15, outline=ACCENT_CYAN, width=1.5, dash=(3, 3))
+                label_x, label_y = _clamp_text_to_rect(
+                    px, py - 22, "Ping bạn", 9,
+                    *overlay_clip_rect, padding=4.0
+                )
+                _draw_text_with_outline(canvas, label_x, label_y, "Ping bạn", 9, ACCENT_CYAN)
 
         # VẼ ĐỒNG ĐỘI
         if getattr(self, 'is_party_active', False) and getattr(self, 'teammates', None):
@@ -2160,12 +2690,28 @@ class MapApp:
                 for tid, tdata in self.teammates.items():
                     if not tdata.get("has_pos"): continue
                     tx, ty = self._pixel(tdata["pos"], is_ingame)
+                    tvitals = tdata.get("vitals")
+                    needs_vitals = bool(
+                        tvitals
+                        and getattr(self, 'show_teammate_vitals_map_var', None)
+                        and self.show_teammate_vitals_map_var.get()
+                    )
+
+                    if not _point_in_rect(
+                        tx, ty, overlay_clip_rect,
+                        42.0 if needs_vitals else 22.0
+                    ):
+                        continue
+
                     _draw_heading_polygon(canvas, tx, ty, tdata["yaw"], 13, ACCENT_GREEN)
                     canvas.create_oval(tx - 5, ty - 5, tx + 5, ty + 5, fill="#10ac84", outline="white", width=1)
-                    _draw_text_with_outline(canvas, tx, ty + 16, tdata["name"], 8, ACCENT_GREEN)
+                    name_x, name_y = _clamp_text_to_rect(
+                        tx, ty + 16, str(tdata["name"]), 8,
+                        *overlay_clip_rect, padding=4.0
+                    )
+                    _draw_text_with_outline(canvas, name_x, name_y, tdata["name"], 8, ACCENT_GREEN)
 
-                    tvitals = tdata.get("vitals")
-                    if tvitals and getattr(self, 'show_teammate_vitals_map_var', None) and self.show_teammate_vitals_map_var.get():
+                    if needs_vitals:
                         bar_w, bar_h, start_y = 28, 3, ty + 24
                         def draw_mini_bar(val, max_val, color, offset_y):
                             if not max_val: max_val = 1
@@ -2183,10 +2729,11 @@ class MapApp:
         if self.current:
             heading = self._current_heading_degrees()
             x, y = self._pixel(self.current, is_ingame)
-            if heading is None: 
-                canvas.create_oval(x - 10, y - 10, x + 10, y + 10, fill=ACCENT_RED, outline="white", width=2)
-            else:
-                _draw_heading_polygon(canvas, x, y, heading, 13, ACCENT_RED)
+            if _point_in_rect(x, y, overlay_clip_rect, 15.0):
+                if heading is None:
+                    canvas.create_oval(x - 10, y - 10, x + 10, y + 10, fill=ACCENT_RED, outline="white", width=2)
+                else:
+                    _draw_heading_polygon(canvas, x, y, heading, 13, ACCENT_RED)
 
     def _pixel(self, position: Position, is_ingame: bool) -> tuple[float, float]:
         nx, ny = self.profile.to_normalized(position)
@@ -2257,6 +2804,36 @@ class MapApp:
             canvas.tag_lower(rect_id, text_id)
             hitboxes[key] = (x, y, x + chip_w, y + chip_h)
             x += chip_w + gap
+
+        # Action chip: permanently remove your own active ping.
+        if self.my_active_ping and not self._ping_is_expired(self.my_active_ping):
+            clear_key = "__clear_my_ping__"
+            clear_text = "✕ PING"
+            clear_color = ACCENT_RED
+
+            probe = canvas.create_text(
+                -10000, -10000, text=clear_text,
+                font=("Segoe UI", 8, "bold"), anchor="w"
+            )
+            bbox = canvas.bbox(probe)
+            canvas.delete(probe)
+            chip_w = (bbox[2] - bbox[0]) + 20 if bbox else 72
+
+            if x + chip_w > canvas_w - margin and x > margin:
+                x = margin
+                y -= chip_h + gap
+
+            text_id = canvas.create_text(
+                x + 10, y + chip_h / 2, text=clear_text,
+                fill="#ffffff", font=("Segoe UI", 8, "bold"), anchor="w"
+            )
+            rect_id = canvas.create_rectangle(
+                x, y, x + chip_w, y + chip_h,
+                fill=clear_color, outline="#ff7675", width=1.2
+            )
+            canvas.tag_lower(rect_id, text_id)
+            hitboxes[clear_key] = (x, y, x + chip_w, y + chip_h)
+
 
         if is_ingame:
             self._ig_zone_toggle_hitboxes = hitboxes
@@ -2334,6 +2911,9 @@ class MapApp:
         hitboxes = self._ig_zone_toggle_hitboxes if is_ingame else self._m_zone_toggle_hitboxes
         for key, (x1, y1, x2, y2) in hitboxes.items():
             if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                if key == "__clear_my_ping__":
+                    self._clear_my_ping()
+                    return
                 self._zone_visible[key] = not self._zone_visible[key]
                 self._redraw()
                 return
