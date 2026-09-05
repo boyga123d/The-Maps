@@ -25,9 +25,21 @@ import customtkinter as ctk
 import islepilot
 import localtelemetry
 
-# --- CẤU HÌNH GIAO DIỆN & FILE LƯU TRỮ ---
+# --- HỆ THỐNG MÀU SẮC & GIAO DIỆN TACTICAL HUD ---
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+HUD_BG = "#0c1015"
+HUD_BORDER = "#1a2530"
+HUD_BORDER_ACTIVE = "#00d2d3"
+CARD_BG = "#131b24"
+CARD_BORDER = "#212e3d"
+ACCENT_CYAN = "#00d2d3"
+ACCENT_GREEN = "#10ac84"
+ACCENT_ORANGE = "#ff9f43"
+ACCENT_RED = "#ee5253"
+ACCENT_YELLOW = "#feca57"
+TEXT_MUTED = "#8395a7"
 
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 DATA_ROOT = (
@@ -44,9 +56,9 @@ APP_ICON_ICO = RESOURCE_ROOT / "assets" / "the_maps.ico"
 APP_ICON_PNG = RESOURCE_ROOT / "assets" / "the_maps.png"
 YOUTUBE_URL = "https://www.youtube.com/@GlobalDailyHighlights"
 DISCORD_URL = "https://discord.gg/XpkRPpDhPU"
-APP_VERSION = "2.4"
+APP_VERSION = "2.4.1"
 
-RELEASE_TAG = "2.4"
+RELEASE_TAG = "2.4.1"
 GITHUB_RELEASE_API = "https://api.github.com/repos/boyga123d/The-Maps/releases/latest"
 GITHUB_RELEASE_PAGE = "https://github.com/boyga123d/The-Maps/releases/latest"
 UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -191,46 +203,42 @@ def _heading_polygon_points(cx: float, cy: float, heading_deg: float, size: floa
     return [*rotate(0.0, -size), *rotate(-size * 0.62, size * 0.75), *rotate(0.0, size * 0.28), *rotate(size * 0.62, size * 0.75)]
 
 def _draw_heading_polygon(canvas: tk.Canvas, cx: float, cy: float, heading_deg: float, size: float, color: str) -> None:
-    canvas.create_polygon(_heading_polygon_points(cx, cy, heading_deg, size), fill=color, outline="white", width=2, joinstyle="round")
+    canvas.create_polygon(_heading_polygon_points(cx, cy, heading_deg, size), fill=color, outline="#ffffff", width=1.5, joinstyle="round")
 
-def _draw_text_with_outline(canvas: tk.Canvas, x: float, y: float, text: str, font_size: int, fill_color: str, outline_color: str = "black") -> None:
+def _draw_text_with_outline(canvas: tk.Canvas, x: float, y: float, text: str, font_size: int, fill_color: str, outline_color: str = "#0b0f14") -> None:
     font_spec = ("Segoe UI", font_size, "bold")
-    canvas.create_text(x-1, y-1, text=text, fill=outline_color, font=font_spec, justify="center")
-    canvas.create_text(x+1, y-1, text=text, fill=outline_color, font=font_spec, justify="center")
-    canvas.create_text(x-1, y+1, text=text, fill=outline_color, font=font_spec, justify="center")
-    canvas.create_text(x+1, y+1, text=text, fill=outline_color, font=font_spec, justify="center")
+    for dx, dy in ((-1,-1), (1,-1), (-1,1), (1,1)):
+        canvas.create_text(x+dx, y+dy, text=text, fill=outline_color, font=font_spec, justify="center")
     canvas.create_text(x, y, text=text, fill=fill_color, font=font_spec, justify="center")
 
 def _format_stat(value: float) -> str:
     if abs(value) < 10: return f"{value:.1f}"
     return str(int(round(value)))
 
-HUD_MARGIN = 12
+HUD_MARGIN = 14
 MINI_MAP_SIZE = 220
 MINI_MAP_CROP_FRACTION = 0.16
-QUEST_PANEL_WIDTH = 260
-HUD_BG = "#10191d"
+QUEST_PANEL_WIDTH = 270
 
+# ==================== VITALS PANEL (HUD CHI TIẾT) ====================
 class VitalsPanel:
     def __init__(self, root: tk.Tk, opacity: float = 1.0):
         self.window = tk.Toplevel(root)
         self.window.overrideredirect(True)
         self.window.attributes("-topmost", True)
         self.window.attributes("-alpha", opacity)
-        self.window.configure(bg=HUD_BG)
-        self.window.geometry(f"+{HUD_MARGIN}+{HUD_MARGIN + MINI_MAP_SIZE + 10}")
+        self.window.configure(bg="#000001")
+        self.window.attributes("-transparentcolor", "#000001")
+        self.window.geometry(f"+{HUD_MARGIN}+{HUD_MARGIN + MINI_MAP_SIZE + 14}")
         self.is_movable = False
         self._drag_start_x = 0
         self._drag_start_y = 0
         
-        self.main_frame = tk.Frame(self.window, bg=HUD_BG, highlightthickness=2, highlightbackground=HUD_BG)
-        self.main_frame.pack(fill="both", expand=True)
-
-        self.canvas = tk.Canvas(self.main_frame, width=220, height=115, background=HUD_BG, highlightthickness=0)
-        self.canvas.pack(padx=2, pady=5)
+        self.canvas = tk.Canvas(self.window, width=240, height=130, background="#000001", highlightthickness=0)
+        self.canvas.pack()
         
-        self._bind_drag(self.main_frame)
-        self._bind_drag(self.canvas)
+        self.canvas.bind("<ButtonPress-1>", self._on_drag_start)
+        self.canvas.bind("<B1-Motion>", self._on_drag_motion)
         self.window.update_idletasks()
         self._set_clickthrough(True)
         self.hide()
@@ -252,21 +260,12 @@ class VitalsPanel:
             user32.SetWindowLongW(hwnd, -20, style)
         except Exception: pass
 
-    def _bind_drag(self, widget: tk.Widget) -> None:
-        widget.bind("<ButtonPress-1>", self._on_drag_start)
-        widget.bind("<B1-Motion>", self._on_drag_motion)
-
     def set_opacity(self, alpha: float) -> None:
         self.window.attributes("-alpha", alpha)
         
     def toggle_move_mode(self) -> None:
         self.is_movable = not self.is_movable
-        if self.is_movable:
-            self.main_frame.configure(highlightbackground="#e74c3c", highlightcolor="#e74c3c")
-            self._set_clickthrough(False)
-        else:
-            self.main_frame.configure(highlightbackground=HUD_BG, highlightcolor=HUD_BG)
-            self._set_clickthrough(True)
+        self._set_clickthrough(not self.is_movable)
 
     def _on_drag_start(self, event) -> None:
         if self.is_movable:
@@ -287,34 +286,55 @@ class VitalsPanel:
         raw_growth = getattr(status, 'growth', 0)
         growth_val = raw_growth * 100 if raw_growth <= 1.0 else raw_growth
 
-        values = [
-            ("Máu", getattr(status, 'health', 0), getattr(status, 'max_health', 1), "#e74c3c"),
-            ("Stamina", getattr(status, 'stamina', 0), getattr(status, 'max_stamina', 1), "#f1c40f"),
-            ("Nước", getattr(status, 'thirst', 0), getattr(status, 'max_thirst', 1), "#3498db"),
-            ("Thức ăn", getattr(status, 'hunger', 0), getattr(status, 'max_hunger', 1), "#e67e22"),
-            ("Phát triển", growth_val, 100, "#0cee2a")
+        border_col = ACCENT_RED if self.is_movable else HUD_BORDER
+        self.canvas.create_rectangle(2, 2, 238, 128, fill=HUD_BG, outline=border_col, width=1.5)
+        self.canvas.create_line(2, 2, 14, 2, fill=ACCENT_CYAN, width=2)
+        self.canvas.create_line(2, 2, 2, 14, fill=ACCENT_CYAN, width=2)
+
+        # Đổi nhãn chữ sang Icon
+        stats = [
+            ("✚", getattr(status, 'health', 0), getattr(status, 'max_health', 1), ACCENT_RED),
+            ("⚡", getattr(status, 'stamina', 0), getattr(status, 'max_stamina', 1), ACCENT_YELLOW),
+            ("💧", getattr(status, 'thirst', 0), getattr(status, 'max_thirst', 1), "#0984e3"),
+            ("🍖", getattr(status, 'hunger', 0), getattr(status, 'max_hunger', 1), ACCENT_ORANGE),
+            ("🌱", growth_val, 100, ACCENT_GREEN)
         ]
         
-        y = 3
-        for label, current, maximum, color in values:
-            self.canvas.create_text(55, y+8, text=label, fill="#cfd8dc", font=("Segoe UI", 8, "bold"), anchor="e")
-            bar_start_x = 65
-            bar_width = 150
-            bar_height = 16
-            self.canvas.create_rectangle(bar_start_x, y, bar_start_x + bar_width, y + bar_height, fill="#26343a", outline="")
+        y = 10
+        for icon, current, maximum, color in stats:
+            # Ô badge chứa Icon
+            self.canvas.create_rectangle(8, y, 38, y + 18, fill="#16222f", outline="#223244")
+            self.canvas.create_text(
+                23, y + 9, 
+                text=icon, 
+                fill=color, 
+                font=("Segoe UI Emoji", 10, "bold")
+            )
+            
+            # Thanh đo (Progress bar)
+            bar_x = 44
+            bar_w = 144
+            bar_h = 18
+            self.canvas.create_rectangle(bar_x, y, bar_x + bar_w, y + bar_h, fill="#121820", outline="#1e2936")
             
             if current is not None and maximum:
                 fraction = max(0.0, min(1.0, current / maximum))
                 if fraction > 0:
-                    self.canvas.create_rectangle(bar_start_x, y, bar_start_x + (bar_width * fraction), y + bar_height, fill=color, outline="")
-                text_val = f"{_format_stat(current)} / {_format_stat(maximum)}"
-                self.canvas.create_text(bar_start_x + (bar_width // 2), y + 8, text=text_val, fill="#ffffff", font=("Segoe UI", 8, "bold"))
+                    self.canvas.create_rectangle(
+                        bar_x + 1, y + 1, 
+                        bar_x + (bar_w * fraction) - 1, y + bar_h - 1, 
+                        fill=color, outline=""
+                    )
+                val_text = f"{_format_stat(current)}/{_format_stat(maximum)}"
+                self.canvas.create_text(bar_x + bar_w / 2, y + 9, text=val_text, fill="#ffffff", font=("Segoe UI", 7, "bold"))
+                pct_text = f"{int(fraction * 100)}%"
+                self.canvas.create_text(214, y + 9, text=pct_text, fill=color, font=("Segoe UI", 7, "bold"))
             else:
-                self.canvas.create_text(bar_start_x + (bar_width // 2), y + 8, text="--", fill="#90a4ae", font=("Segoe UI", 8))
-            y += 22
-
+                self.canvas.create_text(bar_x + bar_w / 2, y + 9, text="OFFLINE", fill="#57606f", font=("Segoe UI", 7))
+            y += 23
     def destroy(self) -> None: self.window.destroy()
 
+# ==================== MINIMAP RADAR PANEL ====================
 class MiniMapPanel:
     def __init__(self, root: tk.Tk, opacity: float = 1.0):
         self.window = tk.Toplevel(root)
@@ -330,7 +350,7 @@ class MiniMapPanel:
         self._drag_start_y = 0
         self.shape = "Vuông"
         
-        self.canvas = tk.Canvas(self.window, width=MINI_MAP_SIZE, height=MINI_MAP_SIZE, background="#000001", highlightthickness=0, borderwidth=0)
+        self.canvas = tk.Canvas(self.window, width=MINI_MAP_SIZE, height=MINI_MAP_SIZE, background="#000001", highlightthickness=0)
         self.canvas.pack()
         self.canvas.bind("<ButtonPress-1>", self._on_drag_start)
         self.canvas.bind("<B1-Motion>", self._on_drag_motion)
@@ -362,14 +382,7 @@ class MiniMapPanel:
 
     def toggle_move_mode(self) -> None:
         self.is_movable = not self.is_movable
-        if self.is_movable:
-            self._set_clickthrough(False)
-            if self.shape == "Vuông": self.canvas.configure(highlightthickness=2, highlightbackground="#e74c3c")
-            else: self.canvas.itemconfig("border_oval", outline="#e74c3c")
-        else:
-            self._set_clickthrough(True)
-            if self.shape == "Vuông": self.canvas.configure(highlightthickness=2, highlightbackground="#37474f")
-            else: self.canvas.itemconfig("border_oval", outline="#37474f")
+        self._set_clickthrough(not self.is_movable)
 
     def _on_drag_start(self, event) -> None:
         if self.is_movable:
@@ -389,12 +402,6 @@ class MiniMapPanel:
         self.shape = shape
         self.canvas.delete("all")
         if source_image is None: return
-        
-        if shape == "Tròn":
-            self.canvas.configure(highlightthickness=0, bg="#000001")
-        else:
-            border_color = "#e74c3c" if self.is_movable else "#37474f"
-            self.canvas.configure(highlightthickness=2, highlightbackground=border_color, bg="#1b262c")
 
         nx, ny = profile.to_normalized(Position(x, y, 0.0))
         width, height = source_image.size
@@ -415,20 +422,22 @@ class MiniMapPanel:
         self._photo = ImageTk.PhotoImage(resized)
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
 
+        center = MINI_MAP_SIZE / 2
+        self.canvas.create_line(center - 12, center, center + 12, center, fill="#ffffff", width=1)
+        self.canvas.create_line(center, center - 12, center, center + 12, fill="#ffffff", width=1)
+        self.canvas.create_oval(center - 24, center - 24, center + 24, center + 24, outline="#ffffff", width=0.8, dash=(2, 4))
+
         if map_app_ref and hasattr(map_app_ref, 'local_markers'):
             for item in map_app_ref.local_markers:
                 key = item.get("key", "").lower()
                 if map_app_ref.overlay_vars.get(key) and map_app_ref.overlay_vars[key].get():
                     color = map_app_ref.overlay_colors.get(key, "#ffffff")
-                    
                     pos = Position(item.get("x", 0.0), item.get("y", 0.0), 0.0)
                     mnx, mny = profile.to_normalized(pos)
-                    
                     mx = (mnx - left) / frac * MINI_MAP_SIZE
                     my = (mny - top) / frac * MINI_MAP_SIZE
-                    
-                    if -5 <= mx <= MINI_MAP_SIZE + 5 and -5 <= my <= MINI_MAP_SIZE + 5:
-                        self.canvas.create_oval(mx-2.5, my-2.5, mx+2.5, my+2.5, fill=color, outline="black", width=0.5)
+                    if 0 <= mx <= MINI_MAP_SIZE and 0 <= my <= MINI_MAP_SIZE:
+                        self.canvas.create_oval(mx-2.5, my-2.5, mx+2.5, my+2.5, fill=color, outline="#000000", width=0.5)
         
         if path_history and len(path_history) > 0:
             points = []
@@ -438,39 +447,48 @@ class MiniMapPanel:
                 hy = (hny - top) / frac * MINI_MAP_SIZE
                 points.extend((hx, hy))
             if len(points) >= 4:
-                self.canvas.create_line(*points, fill="#55a8c9", width=2.5, joinstyle="round", capstyle="round")
+                self.canvas.create_line(*points, fill=ACCENT_CYAN, width=2, joinstyle="round", capstyle="round")
 
         if show_regions and MAP_LABELS:
             for name, pos, color, size in MAP_LABELS:
                 r_nx, r_ny = profile.to_normalized(pos)
                 rx = (r_nx - left) / frac * MINI_MAP_SIZE
                 ry = (r_ny - top) / frac * MINI_MAP_SIZE
-                if -50 <= rx <= MINI_MAP_SIZE + 50 and -50 <= ry <= MINI_MAP_SIZE + 50:
-                    _draw_text_with_outline(self.canvas, rx + TEXT_OFFSET_X, ry + TEXT_OFFSET_Y, name, max(8, size - 3), color)
+                if -20 <= rx <= MINI_MAP_SIZE + 20 and -20 <= ry <= MINI_MAP_SIZE + 20:
+                    _draw_text_with_outline(self.canvas, rx, ry, name, 8, color)
 
+        border_col = ACCENT_RED if self.is_movable else HUD_BORDER_ACTIVE
         if shape == "Tròn":
-            border_color = "#e74c3c" if self.is_movable else "#37474f"
-            self.canvas.create_oval(2, 2, MINI_MAP_SIZE-2, MINI_MAP_SIZE-2, outline=border_color, width=2, tags="border_oval")
+            self.canvas.create_oval(2, 2, MINI_MAP_SIZE-2, MINI_MAP_SIZE-2, outline=border_col, width=2)
+            self.canvas.create_text(center, 12, text="▲ N", fill=ACCENT_CYAN, font=("Segoe UI", 7, "bold"))
+        else:
+            self.canvas.create_rectangle(1, 1, MINI_MAP_SIZE-1, MINI_MAP_SIZE-1, outline=border_col, width=1.5)
+            self.canvas.create_line(1, 1, 16, 1, fill=ACCENT_CYAN, width=3)
+            self.canvas.create_line(1, 1, 1, 16, fill=ACCENT_CYAN, width=3)
+            self.canvas.create_line(MINI_MAP_SIZE-16, 1, MINI_MAP_SIZE-1, 1, fill=ACCENT_CYAN, width=3)
+            self.canvas.create_line(MINI_MAP_SIZE-1, 1, MINI_MAP_SIZE-1, 16, fill=ACCENT_CYAN, width=3)
+            self.canvas.create_text(center, 10, text="N", fill=ACCENT_CYAN, font=("Segoe UI", 7, "bold"))
+
+        self.canvas.create_rectangle(center - 45, MINI_MAP_SIZE - 16, center + 45, MINI_MAP_SIZE - 2, fill="#0c1015", outline="#212e3d")
+        self.canvas.create_text(center, MINI_MAP_SIZE - 9, text=f"{int(x)}, {int(y)}", fill="#c8d6e5", font=("Segoe UI", 6, "bold"))
 
         if teammates:
             try:
                 for tid, tdata in teammates.items():
                     if not tdata.get("has_pos"): continue
-                    tpos = tdata["pos"]
-                    tyaw = tdata["yaw"]
-                    tnx, tny = profile.to_normalized(tpos)
+                    tnx, tny = profile.to_normalized(tdata["pos"])
                     hx = (tnx - left) / frac * MINI_MAP_SIZE
                     hy = (tny - top) / frac * MINI_MAP_SIZE
-                    _draw_heading_polygon(self.canvas, hx, hy, tyaw, 11, "#2ecc71")
-                    self.canvas.create_oval(hx - 4, hy - 4, hx + 4, hy + 4, fill="#27ae60", outline="white", width=1)
+                    _draw_heading_polygon(self.canvas, hx, hy, tdata["yaw"], 10, ACCENT_GREEN)
             except Exception: pass
 
         marker_x = max(0.0, min(float(MINI_MAP_SIZE), (nx - left) / frac * MINI_MAP_SIZE))
         marker_y = max(0.0, min(float(MINI_MAP_SIZE), (ny - top) / frac * MINI_MAP_SIZE))
-        _draw_heading_polygon(self.canvas, marker_x, marker_y, heading_deg, 11, "#ff5b45")
+        _draw_heading_polygon(self.canvas, marker_x, marker_y, heading_deg, 11, ACCENT_RED)
 
     def destroy(self) -> None: self.window.destroy()
 
+# ==================== QUEST PANEL (HUD NHIỆM VỤ) ====================
 class QuestPanel:
     def __init__(self, root: tk.Tk, opacity: float = 1.0):
         self.window = tk.Toplevel(root)
@@ -484,26 +502,36 @@ class QuestPanel:
         self._drag_start_x = 0
         self._drag_start_y = 0
         
-        self.main_frame = tk.Frame(self.window, bg=HUD_BG, highlightthickness=2, highlightbackground=HUD_BG)
-        self.main_frame.pack(fill="both", expand=True)
+        self.main_frame = ctk.CTkFrame(self.window, fg_color=HUD_BG, border_width=1.5, border_color=HUD_BORDER, corner_radius=8)
+        self.main_frame.pack(fill="both", expand=True, padx=2, pady=2)
         
-        self.header_var = tk.StringVar(value="Prime quest")
-        lbl_header = tk.Label(self.main_frame, textvariable=self.header_var, fg="#ffd54f", bg=HUD_BG, font=("Segoe UI", 9, "bold"), anchor="w", wraplength=QUEST_PANEL_WIDTH - 16)
-        lbl_header.pack(fill="x", padx=8, pady=(6, 4))
+        top_bar = ctk.CTkFrame(self.main_frame, fg_color="#141c24", corner_radius=6, height=28)
+        top_bar.pack(fill="x", padx=6, pady=(6, 4))
         
+        self.lbl_title = ctk.CTkLabel(top_bar, text="❖ PRIME OBJECTIVES", font=ctk.CTkFont(size=10, weight="bold"), text_color=ACCENT_CYAN)
+        self.lbl_title.pack(side="left", padx=8)
+        
+        self.prime_val_var = tk.StringVar(value="0/0")
+        self.lbl_val = ctk.CTkLabel(top_bar, textvariable=self.prime_val_var, font=ctk.CTkFont(size=10, weight="bold"), text_color=ACCENT_YELLOW)
+        self.lbl_val.pack(side="right", padx=8)
+
+        self.prime_progress = ctk.CTkProgressBar(self.main_frame, height=4, progress_color=ACCENT_YELLOW, fg_color="#1a2530")
+        self.prime_progress.pack(fill="x", padx=8, pady=(0, 6))
+        self.prime_progress.set(0)
+
         self._bind_drag(self.main_frame)
-        self._bind_drag(lbl_header)
+        self._bind_drag(top_bar)
+        self._bind_drag(self.lbl_title)
 
         self._rows: list[tuple[tk.Label, tk.Label]] = []
-        for _ in range(10):
+        for _ in range(8):
             row = tk.Frame(self.main_frame, bg=HUD_BG)
             row.pack(fill="x", padx=8, pady=1)
-            check = tk.Label(row, text="", fg="#607d8b", bg=HUD_BG, font=("Segoe UI", 9), width=2)
+            check = tk.Label(row, text="", fg="#57606f", bg=HUD_BG, font=("Segoe UI", 9, "bold"), width=2)
             check.pack(side="left")
-            name = tk.Label(row, text="", fg="#cfd8dc", bg=HUD_BG, font=("Segoe UI", 9), anchor="w", wraplength=QUEST_PANEL_WIDTH - 40, justify="left")
+            name = tk.Label(row, text="", fg="#c8d6e5", bg=HUD_BG, font=("Segoe UI", 8), anchor="w", wraplength=QUEST_PANEL_WIDTH - 45, justify="left")
             name.pack(side="left", fill="x", expand=True)
             self._rows.append((check, name))
-            
             self._bind_drag(row)
             self._bind_drag(check)
             self._bind_drag(name)
@@ -538,12 +566,9 @@ class QuestPanel:
         
     def toggle_move_mode(self) -> None:
         self.is_movable = not self.is_movable
-        if self.is_movable:
-            self.main_frame.configure(highlightbackground="#e74c3c", highlightcolor="#e74c3c")
-            self._set_clickthrough(False)
-        else:
-            self.main_frame.configure(highlightbackground=HUD_BG, highlightcolor=HUD_BG)
-            self._set_clickthrough(True)
+        border = ACCENT_RED if self.is_movable else HUD_BORDER
+        self.main_frame.configure(border_color=border)
+        self._set_clickthrough(not self.is_movable)
 
     def _on_drag_start(self, event) -> None:
         if self.is_movable:
@@ -559,12 +584,14 @@ class QuestPanel:
     def show(self) -> None: self.window.deiconify()
     def hide(self) -> None: self.window.withdraw()
     def update(self, status: "islepilot.IslePilotStatus") -> None:
-        self.header_var.set(f"Prime: {status.prime_done}/{status.prime_total} (cần {status.prime_required})")
+        self.prime_val_var.set(f"{status.prime_done} / {status.prime_total}")
+        if status.prime_total > 0:
+            self.prime_progress.set(status.prime_done / status.prime_total)
         for index, (check, name) in enumerate(self._rows):
             if index < len(status.quests):
                 quest = status.quests[index]
-                check.configure(text="✓" if quest.done else "○", fg="#4caf50" if quest.done else "#607d8b")
-                name.configure(text=islepilot.translate_quest(quest.name))
+                check.configure(text="●" if quest.done else "○", fg=ACCENT_GREEN if quest.done else "#57606f")
+                name.configure(text=islepilot.translate_quest(quest.name), fg="#ffffff" if quest.done else "#8395a7")
             else:
                 check.configure(text="")
                 name.configure(text="")
@@ -614,6 +641,7 @@ FOREGROUND_POLL_MS = 300
 LOCAL_POSITION_FRESH_SECONDS = 2.0
 LOCAL_TRAIL_MIN_INTERVAL_SECONDS = 1.5
 
+# ==================== MAIN APPLICATION ====================
 class MapApp:
     POLL_MS = 150
 
@@ -717,17 +745,16 @@ class MapApp:
         self.map_visible = False
         self.ingame_map_visible = False
 
-        # Quản lý Dữ liệu Animals & Herbs Đọc từ File Tĩnh Local
         self.local_markers: list[dict] = []
         self.overlay_vars: dict[str, ctk.BooleanVar] = {}
         self.overlay_colors: dict[str, str] = {}
         self.animal_keys: list[str] = []
         self.herb_keys: list[str] = []
 
-        self.root.title(f"The-Maps v{APP_VERSION}")
+        self.root.title(f"The-Maps {APP_VERSION}")
         if APP_ICON_ICO.exists(): self.root.iconbitmap(default=str(APP_ICON_ICO))
         
-        self.root.geometry("400x950")
+        self.root.geometry("420x940")
         self.root.resizable(False, False)
         self.root.attributes("-topmost", True)
         self.root.protocol("WM_DELETE_WINDOW", self._exit)
@@ -736,7 +763,7 @@ class MapApp:
         self.ingame_map_window.overrideredirect(True)
         self.ingame_map_window.attributes("-topmost", True)
         self.ingame_map_window.attributes("-alpha", 0.95)
-        self.ingame_map_window.configure(bg="#10191d")
+        self.ingame_map_window.configure(bg="#0c1015")
         
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -803,20 +830,15 @@ class MapApp:
             return title == "the isle"
         except Exception: return False
 
-    # ================= ĐỌC FILE TĨNH ANIMALS & HERBS TỪ JSON =================
     def _load_local_animal_herbs(self):
         json_file = LOCAL_JSON_PATH if LOCAL_JSON_PATH.exists() else LOCAL_JSON_FALLBACK
-        if not json_file.exists():
-            lbl = ctk.CTkLabel(self.animal_frame, text="Chưa có dữ liệu động/thực vật (JSON)", text_color="gray", font=ctk.CTkFont(size=11))
-            lbl.pack(anchor="w")
-            return
+        if not json_file.exists(): return
 
         try:
             with open(json_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             self.local_markers = []
-            
             if isinstance(data, dict):
                 for cat_name, items in data.items():
                     if cat_name == "General": continue
@@ -833,9 +855,7 @@ class MapApp:
                 k = item.get("key", "").lower()
                 n = item.get("name", "Unknown")
                 cat = item.get("category", item.get("group", ""))
-                
                 if k == "_road_": continue
-
                 if "Animal" in cat or k in ["chicken", "deer", "boar", "rabbit", "goat", "galli", "turtle", "crab", "taco", "fish", "frog", "dryo", "deino", "galliai", "deinoai"]:
                     animal_dict[k] = n
                 else:
@@ -845,47 +865,45 @@ class MapApp:
             self.herb_keys = sorted(herb_dict.keys())
 
             animal_color_map = {
-                "chicken": "#f1c40f", "deer": "#e67e22", "boar": "#8e44ad", 
-                "rabbit": "#1abc9c", "goat": "#bdc3c7", "galli": "#e74c3c", "galliai": "#e74c3c", 
-                "turtle": "#27ae60", "crab": "#e74c3c", "taco": "#e67e22", 
-                "fish": "#3498db", "frog": "#2ecc71", "dryo": "#95a5a6", 
-                "deino": "#16a085", "deinoai": "#16a085"
+                "chicken": "#feca57", "deer": "#ff9f43", "boar": "#8e44ad", 
+                "rabbit": "#1dd1a1", "goat": "#c8d6e5", "galli": "#ee5253", "galliai": "#ee5253", 
+                "turtle": "#10ac84", "crab": "#ff6b6b", "taco": "#ff9f43", 
+                "fish": "#48dbfb", "frog": "#2ed573", "dryo": "#8395a7", 
+                "deino": "#00d2d3", "deinoai": "#00d2d3"
             }
             herb_color_map = {
-                "agave": "#2ecc71", "ash": "#95a5a6", "azureapol": "#3498db", 
-                "banana": "#f1c40f", "cashew": "#d35400", "chanterelle": "#f39c12", 
-                "coconut": "#e67e22", "crimapol": "#e74c3c", "fiddlehead": "#27ae60", 
-                "fireweed": "#e84393", "jackfruit": "#f1c40f", "mango": "#f39c12", 
-                "marigold": "#f1c40f", "melon": "#2ecc71", "orange": "#e67e22", 
-                "papaya": "#e67e22", "potato": "#d35400", "potatovine": "#1abc9c", 
-                "pumpkin": "#d35400", "radish": "#e84393", "redcurrant": "#c0392b", 
-                "russula": "#e74c3c", "sumac": "#c0392b", "sunchoke": "#f1c40f", 
-                "trillium": "#ffffff", "violetapol": "#9b59b6",
-                "gastro": "#95a5a6", "saltrock": "#ecf0f1", "clamrock": "#34495e"
+                "agave": "#2ed573", "ash": "#8395a7", "azureapol": "#0abde3", 
+                "banana": "#feca57", "cashew": "#e67e22", "chanterelle": "#f39c12", 
+                "coconut": "#ff9f43", "crimapol": "#ee5253", "fiddlehead": "#10ac84", 
+                "fireweed": "#ff78c4", "jackfruit": "#feca57", "mango": "#f39c12", 
+                "marigold": "#feca57", "melon": "#2ed573", "orange": "#ff9f43", 
+                "papaya": "#ff9f43", "potato": "#e67e22", "potatovine": "#1dd1a1", 
+                "pumpkin": "#e67e22", "radish": "#ff78c4", "redcurrant": "#c0392b", 
+                "russula": "#ee5253", "sumac": "#c0392b", "sunchoke": "#feca57", 
+                "trillium": "#ffffff", "violetapol": "#a55eea",
+                "gastro": "#8395a7", "saltrock": "#f1f2f6", "clamrock": "#57606f"
             }
 
             for k in self.animal_keys:
                 self.overlay_vars[k] = ctk.BooleanVar(value=False)
-                self.overlay_colors[k] = animal_color_map.get(k, "#f1c40f")
+                self.overlay_colors[k] = animal_color_map.get(k, "#feca57")
 
             for k in self.herb_keys:
                 self.overlay_vars[k] = ctk.BooleanVar(value=False)
-                self.overlay_colors[k] = herb_color_map.get(k, "#2ecc71")
+                self.overlay_colors[k] = herb_color_map.get(k, "#2ed573")
 
             cols = 3
             for idx, k in enumerate(self.animal_keys):
                 r, c = idx // cols, idx % cols
-                disp = animal_dict[k]
-                chk = ctk.CTkCheckBox(self.animal_frame, text=disp, variable=self.overlay_vars[k], 
-                                      command=self._redraw, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11))
-                chk.grid(row=r, column=c, sticky="w", pady=2, padx=2)
+                chk = ctk.CTkCheckBox(self.animal_frame, text=animal_dict[k], variable=self.overlay_vars[k], 
+                                      command=self._redraw, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11), text_color="#c8d6e5")
+                chk.grid(row=r, column=c, sticky="w", pady=3, padx=2)
 
             for idx, k in enumerate(self.herb_keys):
                 r, c = idx // cols, idx % cols
-                disp = herb_dict[k]
-                chk = ctk.CTkCheckBox(self.herb_frame, text=disp, variable=self.overlay_vars[k], 
-                                      command=self._redraw, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11))
-                chk.grid(row=r, column=c, sticky="w", pady=2, padx=2)
+                chk = ctk.CTkCheckBox(self.herb_frame, text=herb_dict[k], variable=self.overlay_vars[k], 
+                                      command=self._redraw, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11), text_color="#c8d6e5")
+                chk.grid(row=r, column=c, sticky="w", pady=3, padx=2)
 
         except Exception as e:
             traceback.print_exc()
@@ -893,22 +911,20 @@ class MapApp:
     def _toggle_all_animals(self):
         val = self.all_animals_var.get()
         for k in self.animal_keys:
-            if k in self.overlay_vars:
-                self.overlay_vars[k].set(val)
+            if k in self.overlay_vars: self.overlay_vars[k].set(val)
         self._redraw()
 
     def _toggle_all_herbs(self):
         val = self.all_herbs_var.get()
         for k in self.herb_keys:
-            if k in self.overlay_vars:
-                self.overlay_vars[k].set(val)
+            if k in self.overlay_vars: self.overlay_vars[k].set(val)
         self._redraw()
 
     def _toggle_animal_frame(self):
         self.animal_expanded = not self.animal_expanded
         if self.animal_expanded:
             self.btn_toggle_animals.configure(text="▼ Động Vật (Animals)")
-            self.animal_frame.pack(fill="x", padx=20, pady=(0, 4), after=self.animal_head)
+            self.animal_frame.pack(fill="x", padx=12, pady=(0, 6), after=self.animal_head)
         else:
             self.btn_toggle_animals.configure(text="▶ Động Vật (Animals)")
             self.animal_frame.pack_forget()
@@ -917,7 +933,7 @@ class MapApp:
         self.herb_expanded = not self.herb_expanded
         if self.herb_expanded:
             self.btn_toggle_herbs.configure(text="▼ Thực Vật/Khác")
-            self.herb_frame.pack(fill="x", padx=20, pady=(0, 4), after=self.herb_head)
+            self.herb_frame.pack(fill="x", padx=12, pady=(0, 6), after=self.herb_head)
         else:
             self.btn_toggle_herbs.configure(text="▶ Thực Vật/Khác")
             self.herb_frame.pack_forget()
@@ -986,167 +1002,160 @@ class MapApp:
         }, indent=2), encoding="utf-8")
 
     def _build_ui(self) -> None:
-        self.control_frame = ctk.CTkScrollableFrame(self.root, width=400, corner_radius=0)
+        self.control_frame = ctk.CTkScrollableFrame(self.root, width=420, corner_radius=0, fg_color="#0c1015")
         self.control_frame.pack(side="left", fill="both", expand=True)
 
         header_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        header_frame.pack(pady=(10, 2))
-        ctk.CTkLabel(header_frame, text=f"THE-MAPS v{APP_VERSION}", font=ctk.CTkFont(size=22, weight="bold")).pack()
-        ctk.CTkLabel(header_frame, text="THE ISLE HUD", font=ctk.CTkFont(size=11), text_color="gray").pack()
+        header_frame.pack(pady=(14, 6))
+        ctk.CTkLabel(header_frame, text="THE-MAPS PRO", font=ctk.CTkFont(size=22, weight="bold"), text_color=ACCENT_CYAN).pack()
+        ctk.CTkLabel(header_frame, text="TACTICAL SUITE // THE ISLE EVRIMA", font=ctk.CTkFont(size=9, weight="bold"), text_color=TEXT_MUTED).pack()
 
         self.btn_toggle_map = ctk.CTkButton(
-            self.control_frame, text=f"MỞ BẢN ĐỒ (Phím {self.current_hotkey_name})", 
-            font=ctk.CTkFont(size=14, weight="bold"), height=38,
-            command=self._toggle_map_view
+            self.control_frame, text=f"MỞ BẢN ĐỒ CHI TIẾT [{self.current_hotkey_name}]", 
+            font=ctk.CTkFont(size=13, weight="bold"), height=40,
+            fg_color="#0984e3", hover_color="#00cec9", text_color="#ffffff",
+            corner_radius=8, command=self._toggle_map_view
         )
-        self.btn_toggle_map.pack(pady=(10, 5), padx=20, fill="x")
+        self.btn_toggle_map.pack(pady=(6, 8), padx=16, fill="x")
 
-        hk_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        hk_frame.pack(fill="x", padx=20, pady=(0, 2))
-        hk_frame.grid_columnconfigure(0, weight=1)
-        hk_frame.grid_columnconfigure(1, weight=1)
-        hk_frame.grid_columnconfigure(2, weight=1)
+        # CARD 1: PHÍM TẮT & GIAO DIỆN
+        card_hk = ctk.CTkFrame(self.control_frame, fg_color=CARD_BG, border_width=1, border_color=CARD_BORDER, corner_radius=10)
+        card_hk.pack(fill="x", padx=16, pady=4)
+        
+        ctk.CTkLabel(card_hk, text="CẤU HÌNH ĐIỀU KHIỂN & HUD", font=ctk.CTkFont(size=11, weight="bold"), text_color=ACCENT_CYAN).pack(anchor="w", padx=12, pady=(8, 4))
+        
+        hk_grid = ctk.CTkFrame(card_hk, fg_color="transparent")
+        hk_grid.pack(fill="x", padx=10, pady=(0, 4))
+        hk_grid.grid_columnconfigure((0,1,2), weight=1)
 
-        ctk.CTkLabel(hk_frame, text="Ẩn/Hiện:").grid(row=0, column=0, sticky="w", padx=(0, 2))
-        self.hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_hotkey_change, width=105, height=26)
+        ctk.CTkLabel(hk_grid, text="Bật Map", font=ctk.CTkFont(size=10), text_color=TEXT_MUTED).grid(row=0, column=0)
+        self.hotkey_combo = ctk.CTkComboBox(hk_grid, values=list(HOTKEYS.keys()), command=self._on_hotkey_change, width=95, height=26, corner_radius=6)
         self.hotkey_combo.set(self.current_hotkey_name)
-        self.hotkey_combo.grid(row=1, column=0, sticky="w", pady=(0, 5), padx=(0, 2))
+        self.hotkey_combo.grid(row=1, column=0, padx=2)
 
-        ctk.CTkLabel(hk_frame, text="Map Ingame:").grid(row=0, column=1, sticky="w", padx=(2, 2))
-        self.ingame_hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_ingame_hotkey_change, width=105, height=26)
+        ctk.CTkLabel(hk_grid, text="Ingame", font=ctk.CTkFont(size=10), text_color=TEXT_MUTED).grid(row=0, column=1)
+        self.ingame_hotkey_combo = ctk.CTkComboBox(hk_grid, values=list(HOTKEYS.keys()), command=self._on_ingame_hotkey_change, width=95, height=26, corner_radius=6)
         self.ingame_hotkey_combo.set(self.ingame_hotkey_name)
-        self.ingame_hotkey_combo.grid(row=1, column=1, sticky="w", pady=(0, 5), padx=(2, 2))
+        self.ingame_hotkey_combo.grid(row=1, column=1, padx=2)
 
-        ctk.CTkLabel(hk_frame, text="Kéo HUD:").grid(row=0, column=2, sticky="w", padx=(2, 0))
-        self.move_hotkey_combo = ctk.CTkComboBox(hk_frame, values=list(HOTKEYS.keys()), command=self._on_move_hotkey_change, width=105, height=26)
+        ctk.CTkLabel(hk_grid, text="Kéo HUD", font=ctk.CTkFont(size=10), text_color=TEXT_MUTED).grid(row=0, column=2)
+        self.move_hotkey_combo = ctk.CTkComboBox(hk_grid, values=list(HOTKEYS.keys()), command=self._on_move_hotkey_change, width=95, height=26, corner_radius=6)
         self.move_hotkey_combo.set(self.move_hotkey_name)
-        self.move_hotkey_combo.grid(row=1, column=2, sticky="w", pady=(0, 5), padx=(2, 0))
+        self.move_hotkey_combo.grid(row=1, column=2, padx=2)
 
-        # --- KHUNG TÙY CHỌN ANIMALS (COLLAPSIBLE) ---
-        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=4)
-        self.animal_head = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        self.animal_head.pack(fill="x", padx=20)
-        
-        self.animal_expanded = False  # Chuyển thành False
-        self.btn_toggle_animals = ctk.CTkButton(self.animal_head, text="▶ Động Vật (Animals)", width=140, fg_color="transparent", hover_color="#2c3e50", text_color="white", anchor="w", font=ctk.CTkFont(weight="bold"), command=self._toggle_animal_frame)
-        self.btn_toggle_animals.pack(side="left")
-        
-        self.all_animals_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(self.animal_head, text="Tất cả", variable=self.all_animals_var, command=self._toggle_all_animals,
-                        checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).pack(side="right")
-        
-        self.animal_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        # Không dùng pack() ở đây nữa để mặc định ẩn
-
-        # --- KHUNG TÙY CHỌN HERBS (COLLAPSIBLE) ---
-        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=4)
-        self.herb_head = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        self.herb_head.pack(fill="x", padx=20)
-        
-        self.herb_expanded = False  # Chuyển thành False
-        self.btn_toggle_herbs = ctk.CTkButton(self.herb_head, text="▶ Thực Vật/Khác", width=140, fg_color="transparent", hover_color="#2c3e50", text_color="white", anchor="w", font=ctk.CTkFont(weight="bold"), command=self._toggle_herb_frame)
-        self.btn_toggle_herbs.pack(side="left")
-        
-        self.all_herbs_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(self.herb_head, text="Tất cả", variable=self.all_herbs_var, command=self._toggle_all_herbs,
-                        checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).pack(side="right")
-        
-        self.herb_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        # Không dùng pack() ở đây nữa để mặc định ẩn
-
-        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=4)
-        ctk.CTkLabel(self.control_frame, text="Độ mờ MiniMap & Nhiệm vụ:").pack(anchor="w", padx=20, pady=(0, 0))
-        self.opacity_slider = ctk.CTkSlider(self.control_frame, from_=0.2, to=1.0, command=self._on_opacity_change, height=14)
+        ctk.CTkLabel(card_hk, text="Độ mờ lớp HUD:", font=ctk.CTkFont(size=10), text_color=TEXT_MUTED).pack(anchor="w", padx=12, pady=(6, 0))
+        self.opacity_slider = ctk.CTkSlider(card_hk, from_=0.2, to=1.0, command=self._on_opacity_change, height=14, progress_color=ACCENT_CYAN)
         self.opacity_slider.set(self.minimap_opacity)
-        self.opacity_slider.pack(fill="x", padx=20, pady=(0, 4))
+        self.opacity_slider.pack(fill="x", padx=12, pady=(2, 4))
 
-        shape_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        shape_frame.pack(fill="x", padx=20, pady=(0, 2))
-        ctk.CTkLabel(shape_frame, text="Hình dáng:").pack(side="left")
-        self.shape_seg = ctk.CTkSegmentedButton(shape_frame, values=["Vuông", "Tròn"], variable=self.shape_var, command=self._on_shape_change)
+        shape_row = ctk.CTkFrame(card_hk, fg_color="transparent")
+        shape_row.pack(fill="x", padx=12, pady=(2, 6))
+        ctk.CTkLabel(shape_row, text="Dáng MiniMap:", font=ctk.CTkFont(size=11), text_color="#c8d6e5").pack(side="left")
+        self.shape_seg = ctk.CTkSegmentedButton(shape_row, values=["Vuông", "Tròn"], variable=self.shape_var, command=self._on_shape_change, corner_radius=6)
         self.shape_seg.pack(side="right")
 
-        hud_opts_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        hud_opts_frame.pack(fill="x", padx=20, pady=(2, 2))
-        hud_opts_frame.grid_columnconfigure(0, weight=1)
-        hud_opts_frame.grid_columnconfigure(1, weight=1)
+        hud_checks = ctk.CTkFrame(card_hk, fg_color="transparent")
+        hud_checks.pack(fill="x", padx=10, pady=(0, 8))
+        hud_checks.grid_columnconfigure((0,1), weight=1)
+        ctk.CTkCheckBox(hud_checks, text="Hiện MiniMap", variable=self.show_minimap_var, command=self._on_hud_toggle, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).grid(row=0, column=0, sticky="w", pady=2)
+        ctk.CTkCheckBox(hud_checks, text="Hiện Chỉ số", variable=self.show_vitals_var, command=self._on_hud_toggle, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).grid(row=0, column=1, sticky="w", pady=2)
+        ctk.CTkCheckBox(hud_checks, text="Hiện Nhiệm vụ", variable=self.show_quests_var, command=self._on_hud_toggle, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).grid(row=1, column=0, sticky="w", pady=2)
+        ctk.CTkCheckBox(hud_checks, text="Tên Khu Vực", variable=self.show_regions_var, command=self._on_region_toggle, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).grid(row=1, column=1, sticky="w", pady=2)
 
-        ctk.CTkCheckBox(hud_opts_frame, text="Hiện MiniMap", variable=self.show_minimap_var, command=self._on_hud_toggle, checkbox_width=20, checkbox_height=20).grid(row=0, column=0, sticky="w", pady=2)
-        ctk.CTkCheckBox(hud_opts_frame, text="Hiện Chỉ số", variable=self.show_vitals_var, command=self._on_hud_toggle, checkbox_width=20, checkbox_height=20).grid(row=0, column=1, sticky="w", pady=2)
-        ctk.CTkCheckBox(hud_opts_frame, text="Hiện Nhiệm vụ", variable=self.show_quests_var, command=self._on_hud_toggle, checkbox_width=20, checkbox_height=20).grid(row=1, column=0, sticky="w", pady=2)
-        ctk.CTkCheckBox(hud_opts_frame, text="Tên Khu Vực", variable=self.show_regions_var, command=self._on_region_toggle, checkbox_width=20, checkbox_height=20).grid(row=1, column=1, sticky="w", pady=2)
-
-        # --- TÍNH NĂNG ĐỒNG ĐỘI (PARTY) ---
-        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=4)
-        ctk.CTkLabel(self.control_frame, text="API Server & Chế độ Đồng Đội:").pack(anchor="w", padx=20)
+        # CARD 2: ĐỘNG VẬT (COLLAPSIBLE)
+        card_animal = ctk.CTkFrame(self.control_frame, fg_color=CARD_BG, border_width=1, border_color=CARD_BORDER, corner_radius=10)
+        card_animal.pack(fill="x", padx=16, pady=4)
         
-        self.entry_api = ctk.CTkEntry(self.control_frame, textvariable=self.api_url_var, height=28, placeholder_text="http://IP_VPS:8000/sync")
-        self.entry_api.pack(fill="x", padx=20, pady=(0, 4))
+        self.animal_head = ctk.CTkFrame(card_animal, fg_color="transparent")
+        self.animal_head.pack(fill="x", padx=10, pady=6)
+        self.animal_expanded = False
+        self.btn_toggle_animals = ctk.CTkButton(self.animal_head, text="▶ Động Vật (Animals)", width=140, fg_color="transparent", hover_color="#212e3d", text_color="#ffffff", anchor="w", font=ctk.CTkFont(weight="bold", size=11), command=self._toggle_animal_frame)
+        self.btn_toggle_animals.pack(side="left")
+        self.all_animals_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(self.animal_head, text="Tất cả", variable=self.all_animals_var, command=self._toggle_all_animals, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).pack(side="right")
+        
+        self.animal_frame = ctk.CTkFrame(card_animal, fg_color="transparent")
 
-        name_row = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        name_row.pack(fill="x", padx=20, pady=(0, 2))
-        self.entry_name = ctk.CTkEntry(name_row, textvariable=self.player_name_var, placeholder_text="Tên hiển thị của bạn...", height=28)
-        self.entry_name.pack(side="left", fill="x", expand=True)
+        # CARD 3: THỰC VẬT / TÀI NGUYÊN (COLLAPSIBLE)
+        card_herb = ctk.CTkFrame(self.control_frame, fg_color=CARD_BG, border_width=1, border_color=CARD_BORDER, corner_radius=10)
+        card_herb.pack(fill="x", padx=16, pady=4)
+        
+        self.herb_head = ctk.CTkFrame(card_herb, fg_color="transparent")
+        self.herb_head.pack(fill="x", padx=10, pady=6)
+        self.herb_expanded = False
+        self.btn_toggle_herbs = ctk.CTkButton(self.herb_head, text="▶ Thực Vật & Khoáng Sản", width=160, fg_color="transparent", hover_color="#212e3d", text_color="#ffffff", anchor="w", font=ctk.CTkFont(weight="bold", size=11), command=self._toggle_herb_frame)
+        self.btn_toggle_herbs.pack(side="left")
+        self.all_herbs_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(self.herb_head, text="Tất cả", variable=self.all_herbs_var, command=self._toggle_all_herbs, checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=11)).pack(side="right")
+        
+        self.herb_frame = ctk.CTkFrame(card_herb, fg_color="transparent")
 
-        party_row = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        party_row.pack(fill="x", padx=20, pady=(0, 4))
-        self.entry_party = ctk.CTkEntry(party_row, textvariable=self.party_code_var, width=110, placeholder_text="Mã phòng...", height=28)
-        self.entry_party.pack(side="left", padx=(0, 5))
+        # CARD 4: PARTY / ĐỒNG ĐỘI
+        card_party = ctk.CTkFrame(self.control_frame, fg_color=CARD_BG, border_width=1, border_color=CARD_BORDER, corner_radius=10)
+        card_party.pack(fill="x", padx=16, pady=4)
+        
+        ctk.CTkLabel(card_party, text="KẾT NỐI TỔ ĐỘI (PARTY)", font=ctk.CTkFont(size=11, weight="bold"), text_color=ACCENT_CYAN).pack(anchor="w", padx=12, pady=(8, 2))
+        
+        self.entry_api = ctk.CTkEntry(card_party, textvariable=self.api_url_var, height=28, placeholder_text="API Relay Server...")
+        self.entry_api.pack(fill="x", padx=10, pady=2)
+
+        name_box = ctk.CTkEntry(card_party, textvariable=self.player_name_var, placeholder_text="Tên của bạn trong Party...", height=28)
+        name_box.pack(fill="x", padx=10, pady=2)
+
+        party_row = ctk.CTkFrame(card_party, fg_color="transparent")
+        party_row.pack(fill="x", padx=10, pady=2)
+        self.entry_party = ctk.CTkEntry(party_row, textvariable=self.party_code_var, width=120, placeholder_text="Mã phòng...", height=28)
+        self.entry_party.pack(side="left", padx=(0, 4))
         self.entry_party_pw = ctk.CTkEntry(party_row, textvariable=self.party_pw_var, width=100, placeholder_text="Mật khẩu", show="*", height=28)
-        self.entry_party_pw.pack(side="left", padx=(0, 5))
-        self.btn_party = ctk.CTkButton(party_row, text="Kết nối", width=70, height=28, command=self._toggle_party)
-        self.btn_party.pack(side="left")
+        self.entry_party_pw.pack(side="left", padx=(0, 4))
+        self.btn_party = ctk.CTkButton(party_row, text="Kết nối", width=70, height=28, fg_color="#0984e3", hover_color="#00cec9", command=self._toggle_party)
+        self.btn_party.pack(side="left", fill="x", expand=True)
 
-        party_options = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        party_options.pack(fill="x", padx=20, pady=(0, 4))
-        ctk.CTkCheckBox(party_options, text="Chỉ số trên Map", variable=self.show_teammate_vitals_map_var, command=lambda: (self._save_app_config(), self._redraw()), checkbox_width=18, checkbox_height=18, font=ctk.CTkFont(size=11)).pack(side="left")
-        ctk.CTkCheckBox(party_options, text="Chỉ số trên Menu", variable=self.show_teammate_vitals_menu_var, command=lambda: (self._save_app_config(), self._update_teammates_ui()), checkbox_width=18, checkbox_height=18, font=ctk.CTkFont(size=11)).pack(side="right")
+        party_opts = ctk.CTkFrame(card_party, fg_color="transparent")
+        party_opts.pack(fill="x", padx=10, pady=(2, 4))
+        ctk.CTkCheckBox(party_opts, text="Chỉ số trên Map", variable=self.show_teammate_vitals_map_var, command=lambda: (self._save_app_config(), self._redraw()), checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=10)).pack(side="left")
+        ctk.CTkCheckBox(party_opts, text="Chỉ số trên Menu", variable=self.show_teammate_vitals_menu_var, command=lambda: (self._save_app_config(), self._update_teammates_ui()), checkbox_width=16, checkbox_height=16, font=ctk.CTkFont(size=10)).pack(side="right")
 
-        ctk.CTkLabel(self.control_frame, text="Thông tin Đồng Đội:").pack(anchor="w", padx=20, pady=(5, 0))
-        self.teammates_panel = ctk.CTkFrame(self.control_frame, fg_color="gray15")
-        self.teammates_panel.pack(fill="x", padx=20, pady=(2, 5))
+        self.teammates_panel = ctk.CTkFrame(card_party, fg_color="#0c1015", corner_radius=6)
+        self.teammates_panel.pack(fill="x", padx=10, pady=(2, 8))
         self._update_teammates_ui()
 
-        # Bản đồ
-        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=4)
-        ctk.CTkLabel(self.control_frame, text="Bản đồ hiển thị:").pack(anchor="w", padx=20, pady=(0, 0))
-        self.map_combo = ctk.CTkComboBox(self.control_frame, values=[p.name for p in self.profiles], command=self._select_profile, height=28)
-        self.map_combo.set(self.profile.name)
-        self.map_combo.pack(fill="x", padx=20, pady=(0, 4))
+        # CARD 5: BẢN ĐỒ & HỆ THỐNG TELEMETRY
+        card_sys = ctk.CTkFrame(self.control_frame, fg_color=CARD_BG, border_width=1, border_color=CARD_BORDER, corner_radius=10)
+        card_sys.pack(fill="x", padx=16, pady=4)
+        
+        ctk.CTkLabel(card_sys, text="HỆ THỐNG & TELEMETRY", font=ctk.CTkFont(size=11, weight="bold"), text_color=ACCENT_CYAN).pack(anchor="w", padx=12, pady=(8, 2))
 
-        # IslePilot
-        ctk.CTkLabel(self.control_frame, text="IslePilot (Chỉ số & Nhiệm vụ):").pack(anchor="w", padx=20)
+        self.map_combo = ctk.CTkComboBox(card_sys, values=[p.name for p in self.profiles], command=self._select_profile, height=28)
+        self.map_combo.set(self.profile.name)
+        self.map_combo.pack(fill="x", padx=10, pady=2)
+
         self.islepilot_status_var = tk.StringVar(value=self._islepilot_status_text())
-        ctk.CTkLabel(self.control_frame, textvariable=self.islepilot_status_var, text_color="#4caf50", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=20)
-        
-        islepilot_btn_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        islepilot_btn_frame.pack(fill="x", padx=20, pady=(0, 4))
-        
-        self.btn_islepilot = ctk.CTkButton(islepilot_btn_frame, text="Đăng nhập Steam", fg_color="#2b7a2b", hover_color="#1e541e", command=self._on_connect_click, height=28)
-        self.btn_islepilot.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
-        self.btn_islepilot_token = ctk.CTkButton(islepilot_btn_frame, text="Nhập Token Web", fg_color="#2980b9", hover_color="#1f618d", command=self._on_manual_token_click, height=28)
+        ctk.CTkLabel(card_sys, textvariable=self.islepilot_status_var, text_color=ACCENT_GREEN, font=ctk.CTkFont(size=10)).pack(anchor="w", padx=12, pady=(2, 2))
+
+        islepilot_btns = ctk.CTkFrame(card_sys, fg_color="transparent")
+        islepilot_btns.pack(fill="x", padx=10, pady=(0, 4))
+        self.btn_islepilot = ctk.CTkButton(islepilot_btns, text="Steam Login", fg_color="#10ac84", hover_color="#1dd1a1", command=self._on_connect_click, height=26)
+        self.btn_islepilot.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.btn_islepilot_token = ctk.CTkButton(islepilot_btns, text="Web Token", fg_color="#2c3e50", hover_color="#34495e", command=self._on_manual_token_click, height=26)
         self.btn_islepilot_token.pack(side="right", fill="x", expand=True)
 
-        # Npcap
-        ctk.CTkFrame(self.control_frame, height=2, fg_color="gray30").pack(fill="x", padx=20, pady=4)
-        ctk.CTkLabel(self.control_frame, text="Local position realtime (Npcap):").pack(anchor="w", padx=20)
         self.local_status_var = tk.StringVar(value=self._local_status_text())
-        ctk.CTkLabel(self.control_frame, textvariable=self.local_status_var, text_color="#607d8b", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=20)
+        ctk.CTkLabel(card_sys, textvariable=self.local_status_var, text_color=TEXT_MUTED, font=ctk.CTkFont(size=10)).pack(anchor="w", padx=12, pady=(2, 2))
 
-        btn_row = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        btn_row.pack(fill="x", padx=20, pady=(0, 4))
-        ctk.CTkButton(btn_row, text="Kiểm tra lại", width=120, command=lambda: (self._retry_local_telemetry(), self.local_status_var.set(self._local_status_text())), height=28).pack(side="left")
-        ctk.CTkButton(btn_row, text="Cài Npcap", width=120, fg_color="#c0392b", hover_color="#922b21", command=self._install_npcap_async, height=28).pack(side="right")
+        btn_row = ctk.CTkFrame(card_sys, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=(0, 8))
+        ctk.CTkButton(btn_row, text="Kiểm tra lại", height=26, fg_color="#2c3e50", hover_color="#34495e", command=lambda: (self._retry_local_telemetry(), self.local_status_var.set(self._local_status_text()))).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(btn_row, text="Cài Npcap", height=26, fg_color="#ee5253", hover_color="#ff6b6b", command=self._install_npcap_async).pack(side="right", fill="x", expand=True)
 
-        # Footer
         footer = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        footer.pack(fill="x", padx=20, pady=10)
-        ctk.CTkButton(footer, text="Youtube", width=120, fg_color="#555555", hover_color="#333333", command=lambda: webbrowser.open(YOUTUBE_URL), height=28).pack(side="left")
-        ctk.CTkButton(footer, text="Discord", width=120, fg_color="#5865F2", hover_color="#4752C4", command=lambda: webbrowser.open(DISCORD_URL), height=28).pack(side="right")
+        footer.pack(fill="x", padx=16, pady=10)
+        ctk.CTkButton(footer, text="YouTube", width=120, fg_color="#2c3e50", hover_color="#34495e", command=lambda: webbrowser.open(YOUTUBE_URL), height=26).pack(side="left")
+        ctk.CTkButton(footer, text="Discord", width=120, fg_color="#5865F2", hover_color="#4752C4", command=lambda: webbrowser.open(DISCORD_URL), height=26).pack(side="right")
 
+        # KHUNG MAP LỚN
         self.map_frame = ctk.CTkFrame(self.root, corner_radius=0)
-        self.menu_canvas = tk.Canvas(self.map_frame, background="#000000", highlightthickness=0)
+        self.menu_canvas = tk.Canvas(self.map_frame, background="#0c1015", highlightthickness=0)
         self.menu_canvas.pack(fill="both", expand=True)
         self.menu_canvas.bind("<Configure>", lambda e: self._redraw_menu())
         self.menu_canvas.bind("<MouseWheel>", lambda e: self._on_mouse_wheel(e, False))
@@ -1156,7 +1165,7 @@ class MapApp:
         self.menu_canvas.bind("<Double-Button-1>", lambda e: self._on_reset_view(e, False))
         self.menu_canvas.bind("<ButtonPress-2>", lambda e: self._on_map_ping(e, False))
 
-        self.ingame_canvas = tk.Canvas(self.ingame_map_window, background="#000000", highlightthickness=2, highlightbackground="#f1c40f")
+        self.ingame_canvas = tk.Canvas(self.ingame_map_window, background="#0c1015", highlightthickness=1.5, highlightbackground=ACCENT_CYAN)
         self.ingame_canvas.pack(fill="both", expand=True)
         self.ingame_canvas.bind("<Configure>", lambda e: self._redraw_ingame())
         self.ingame_canvas.bind("<MouseWheel>", lambda e: self._on_mouse_wheel(e, True))
@@ -1173,7 +1182,7 @@ class MapApp:
             widget.destroy()
 
         if not getattr(self, 'is_party_active', False) or not getattr(self, 'teammates', {}):
-            ctk.CTkLabel(self.teammates_panel, text="Chưa có ai trong phòng.", text_color="gray").pack(pady=10)
+            ctk.CTkLabel(self.teammates_panel, text="Không có đồng đội trong phòng", text_color="#57606f", font=ctk.CTkFont(size=10)).pack(pady=8)
             return
 
         for tid, tdata in self.teammates.items():
@@ -1181,36 +1190,35 @@ class MapApp:
             has_pos = tdata.get("has_pos", False)
             tvitals = tdata.get("vitals")
 
-            row = ctk.CTkFrame(self.teammates_panel, fg_color="transparent")
-            row.pack(fill="x", padx=10, pady=5)
+            row = ctk.CTkFrame(self.teammates_panel, fg_color="#141c24", corner_radius=6)
+            row.pack(fill="x", padx=6, pady=3)
 
-            if has_pos:
-                ctk.CTkLabel(row, text=tname, font=ctk.CTkFont(weight="bold", size=12)).pack(anchor="w")
-            else:
-                ctk.CTkLabel(row, text=f"{tname} (Ngoài game)", font=ctk.CTkFont(weight="bold", size=12), text_color="gray").pack(anchor="w")
+            top = ctk.CTkFrame(row, fg_color="transparent")
+            top.pack(fill="x", padx=6, pady=2)
+            dot_col = ACCENT_GREEN if has_pos else "#57606f"
+            ctk.CTkLabel(top, text="●", text_color=dot_col, font=ctk.CTkFont(size=8)).pack(side="left", padx=(0, 4))
+            ctk.CTkLabel(top, text=tname, font=ctk.CTkFont(weight="bold", size=11), text_color="#ffffff").pack(side="left")
 
             if tvitals and self.show_teammate_vitals_menu_var.get():
-                bars_frame = ctk.CTkFrame(row, fg_color="transparent")
-                bars_frame.pack(fill="x", pady=(2, 0))
-
+                bars = ctk.CTkFrame(row, fg_color="transparent")
+                bars.pack(fill="x", padx=6, pady=(0, 4))
                 def make_bar(parent, val, max_val, color):
                     frac = max(0.0, min(1.0, val / max_val)) if max_val else 0
-                    bar = ctk.CTkProgressBar(parent, height=4, progress_color=color, fg_color="#26343a")
+                    bar = ctk.CTkProgressBar(parent, height=3, progress_color=color, fg_color="#212e3d")
                     bar.set(frac)
-                    bar.pack(side="top", fill="x", pady=2)
+                    bar.pack(side="top", fill="x", pady=1)
 
-                make_bar(bars_frame, tvitals.get('h', 0), tvitals.get('mh', 1), "#e74c3c")
-                make_bar(bars_frame, tvitals.get('s', 0), tvitals.get('ms', 1), "#f1c40f")
-                make_bar(bars_frame, tvitals.get('f', 0), tvitals.get('mf', 1), "#e67e22")
-                make_bar(bars_frame, tvitals.get('w', 0), tvitals.get('mw', 1), "#3498db")
+                make_bar(bars, tvitals.get('h', 0), tvitals.get('mh', 1), ACCENT_RED)
+                make_bar(bars, tvitals.get('s', 0), tvitals.get('ms', 1), ACCENT_YELLOW)
+                make_bar(bars, tvitals.get('f', 0), tvitals.get('mf', 1), ACCENT_ORANGE)
+                make_bar(bars, tvitals.get('w', 0), tvitals.get('mw', 1), "#0984e3")
 
     def _reset_party_ui(self, show_error=None):
         self.is_party_active = False
-        self.btn_party.configure(text="Kết nối", fg_color=["#3a7ebf", "#1f538d"], hover_color=["#325882", "#14375e"])
+        self.btn_party.configure(text="Kết nối", fg_color="#0984e3", hover_color="#00cec9")
         self.entry_party.configure(state="normal")
         self.entry_party_pw.configure(state="normal")
         self.entry_api.configure(state="normal")
-        self.entry_name.configure(state="normal")
         self.teammates.clear()
         self._update_teammates_ui()
         self._redraw()
@@ -1231,11 +1239,10 @@ class MapApp:
             
             self._save_sv_config()
             self.is_party_active = True
-            self.btn_party.configure(text="Ngắt", fg_color="#c0392b", hover_color="#922b21")
+            self.btn_party.configure(text="Ngắt", fg_color=ACCENT_RED, hover_color="#ff6b6b")
             self.entry_party.configure(state="disabled")
             self.entry_party_pw.configure(state="disabled")
             self.entry_api.configure(state="disabled")
-            self.entry_name.configure(state="disabled")
             threading.Thread(target=self._party_sync_loop, daemon=True).start()
 
     def _party_sync_loop(self):
@@ -1274,7 +1281,6 @@ class MapApp:
                 resp = requests.post(target_url, json=payload, timeout=3)
                 if resp.status_code == 200:
                     data = resp.json().get("teammates", [])
-                    
                     valid_teammates = {}
                     for t in data:
                         has_pos = (t["x"] != 999999.0 and t["y"] != 999999.0)
@@ -1337,7 +1343,7 @@ class MapApp:
             if hasattr(self, 'btn_islepilot_token'):
                 self.btn_islepilot_token.configure(state="disabled")
         else:
-            self.btn_islepilot.configure(text="Đăng nhập Steam", state="normal")
+            self.btn_islepilot.configure(text="Steam Login", state="normal")
             if hasattr(self, 'btn_islepilot_token'):
                 self.btn_islepilot_token.configure(state="normal")
                 
@@ -1348,9 +1354,9 @@ class MapApp:
         self.current_hotkey_vk = HOTKEYS[choice]
         self._save_app_config()
         if self.map_visible:
-            self.btn_toggle_map.configure(text=f"ẨN BẢN ĐỒ (Phím {self.current_hotkey_name})")
+            self.btn_toggle_map.configure(text=f"ẨN BẢN ĐỒ CHI TIẾT [{self.current_hotkey_name}]")
         else:
-            self.btn_toggle_map.configure(text=f"MỞ BẢN ĐỒ (Phím {self.current_hotkey_name})")
+            self.btn_toggle_map.configure(text=f"MỞ BẢN ĐỒ CHI TIẾT [{self.current_hotkey_name}]")
 
     def _on_ingame_hotkey_change(self, choice: str) -> None:
         self.ingame_hotkey_name = choice
@@ -1432,15 +1438,15 @@ class MapApp:
         hk_text = self.current_hotkey_name
         if self.map_visible:
             self.map_frame.pack_forget()
-            self.root.geometry("400x950")
+            self.root.geometry("420x940")
             self.root.resizable(False, False)
-            self.btn_toggle_map.configure(text=f"MỞ BẢN ĐỒ (Phím {hk_text})", fg_color=["#3a7ebf", "#1f538d"], hover_color=["#325882", "#14375e"])
+            self.btn_toggle_map.configure(text=f"MỞ BẢN ĐỒ CHI TIẾT [{hk_text}]", fg_color="#0984e3", hover_color="#00cec9")
             self.map_visible = False
         else:
-            self.root.geometry("1100x950")
+            self.root.geometry("1180x940")
             self.root.resizable(True, True) 
-            self.map_frame.pack(side="right", fill="both", expand=True, padx=(5, 0))
-            self.btn_toggle_map.configure(text=f"ẨN BẢN ĐỒ (Phím {hk_text})", fg_color="#c0392b", hover_color="#922b21")
+            self.map_frame.pack(side="right", fill="both", expand=True, padx=(4, 0))
+            self.btn_toggle_map.configure(text=f"ẨN BẢN ĐỒ CHI TIẾT [{hk_text}]", fg_color=ACCENT_RED, hover_color="#ff6b6b")
             self.map_visible = True
             self._redraw_menu()
 
@@ -1453,10 +1459,6 @@ class MapApp:
             self._toggle_ingame_map()
         self.root.after(20, self._poll_global_escape_event)
 
-    def _hide_map_tab(self, _event=None):
-        self._toggle_map_view()
-        return "break"
-
     def _show_map(self) -> None:
         if getattr(self, 'ingame_map_visible', False):
             self._toggle_ingame_map()
@@ -1467,7 +1469,7 @@ class MapApp:
 
     def _start_tray(self) -> None:
         if APP_ICON_PNG.exists(): image = Image.open(APP_ICON_PNG).convert("RGBA")
-        else: image = Image.new("RGBA", (64, 64), "#10191d")
+        else: image = Image.new("RGBA", (64, 64), "#0c1015")
         menu = pystray.Menu(pystray.MenuItem("Mở The-Maps", self._tray_open), pystray.MenuItem("Thoát", self._tray_exit))
         self.tray_icon = pystray.Icon("The-Maps", image, "The-Maps", menu)
         self.tray_icon.run_detached()
@@ -1538,8 +1540,8 @@ class MapApp:
         return (self._local_last_update > 0.0 and time.monotonic() - self._local_last_update <= LOCAL_POSITION_FRESH_SECONDS)
 
     def _local_status_text(self) -> str:
-        labels = {"starting": "Local realtime: đang khởi động", "npcap_missing": "Local realtime: thiếu Npcap · có thể cài tự động", "waiting_game": "Local realtime: chờ The Isle", "waiting_packets": "Local realtime: chờ movement packets", "tracking": "Local realtime: đang nhận X/Y/Yaw", "capture_error": "Local realtime: lỗi mở Npcap"}
-        return labels.get(self._local_state, f"Local realtime: {self._local_state}")
+        labels = {"starting": "Local telemetry: Đang khởi động...", "npcap_missing": "Local telemetry: Thiếu Npcap", "waiting_game": "Local telemetry: Chờ game The Isle", "waiting_packets": "Local telemetry: Chờ dữ liệu di chuyển", "tracking": "Local telemetry: Hoạt động (Realtime)", "capture_error": "Local telemetry: Lỗi Npcap"}
+        return labels.get(self._local_state, f"Local: {self._local_state}")
 
     def _start_local_telemetry(self) -> None:
         self._stop_local_telemetry()
@@ -1561,30 +1563,30 @@ class MapApp:
     def _prompt_for_npcap_if_needed(self) -> None:
         if self._npcap_prompted or localtelemetry.npcap_installed(): return
         self._npcap_prompted = True
-        if messagebox.askyesno("The-Maps · Realtime position", "Minimap realtime cần Npcap để đọc movement packets của The Isle.\n\nTải và cài Npcap ngay?"):
+        if messagebox.askyesno("The-Maps Telemetry", "Minimap realtime cần Npcap để đọc dữ liệu vị trí mượt hơn.\nCài đặt Npcap ngay?"):
             self._install_npcap_async()
 
     def _install_npcap_async(self) -> None:
         if localtelemetry.npcap_installed():
-            messagebox.showinfo("The-Maps", "Npcap đã được cài trên máy.")
+            messagebox.showinfo("The-Maps", "Npcap đã được cài đặt.")
             self._retry_local_telemetry()
             return
         progress_window = tk.Toplevel(self.root)
-        progress_window.title("The-Maps · Installing Npcap")
+        progress_window.title("Cài đặt Npcap")
         progress_window.resizable(False, False)
         progress_window.protocol("WM_DELETE_WINDOW", lambda: None)
         frame = ttk.Frame(progress_window, padding=16)
         frame.pack(fill="both", expand=True)
-        status_var = tk.StringVar(value="Đang tìm bản Npcap mới nhất trên npcap.com…")
-        ttk.Label(frame, textvariable=status_var, width=54, wraplength=410).pack(anchor="w")
-        progress = ttk.Progressbar(frame, length=410, mode="indeterminate")
-        progress.pack(fill="x", pady=(12, 0))
+        status_var = tk.StringVar(value="Đang kết nối npcap.com...")
+        ttk.Label(frame, textvariable=status_var, width=50).pack(anchor="w")
+        progress = ttk.Progressbar(frame, length=380, mode="indeterminate")
+        progress.pack(fill="x", pady=(10, 0))
         progress.start(12)
 
         def set_status(text: str) -> None: self.root.after(0, lambda: status_var.set(text))
         def on_progress(downloaded: int, total: int | None) -> None:
-            if total and total > 0: set_status(f"Đang tải Npcap từ npcap.com… {min(100.0, downloaded * 100.0 / total):.0f}%")
-            else: set_status(f"Đang tải Npcap từ npcap.com… {downloaded / 1024:.0f} KB")
+            if total and total > 0: set_status(f"Đang tải Npcap: {min(100.0, downloaded * 100.0 / total):.0f}%")
+            else: set_status(f"Đang tải Npcap: {downloaded / 1024:.0f} KB")
 
         def worker() -> None:
             reboot_required = False
@@ -1592,9 +1594,9 @@ class MapApp:
             except Exception as exc: success, message = False, str(exc)
             def finish() -> None:
                 if progress_window.winfo_exists(): progress.stop(); progress_window.destroy()
-                if success and reboot_required: messagebox.showinfo("The-Maps", f"{message}\n\nHãy khởi động lại Windows rồi mở The-Maps lại để bật minimap realtime.")
+                if success and reboot_required: messagebox.showinfo("The-Maps", f"{message}\nKhởi động lại máy để kích hoạt.")
                 elif success: messagebox.showinfo("The-Maps", message); self._retry_local_telemetry()
-                else: messagebox.showerror("The-Maps · Npcap", f"Không cài được Npcap.\n\n{message}\n\nThe-Maps vẫn có thể dùng IslePilot REST làm vị trí fallback.")
+                else: messagebox.showerror("The-Maps", f"Không cài được Npcap:\n{message}")
             self.root.after(0, finish)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1623,9 +1625,9 @@ class MapApp:
 
     def _islepilot_status_text(self) -> str:
         if getattr(self, '_islepilot_steam_id', None):
-            if self._islepilot_steam_id == "ManualWeb": return "Đã kết nối · Token Web"
-            return f"Đã kết nối · Steam ...{self._islepilot_steam_id[-4:]}"
-        return "Chưa kết nối"
+            if self._islepilot_steam_id == "ManualWeb": return "● IslePilot: Web Token Active"
+            return f"● IslePilot: Steam Connected (...{self._islepilot_steam_id[-4:]})"
+        return "○ IslePilot: Chưa kết nối"
 
     def _islepilot_connected(self) -> bool: return getattr(self, '_islepilot_steam_id', None) is not None
 
@@ -1674,23 +1676,19 @@ class MapApp:
     def _islepilot_handle_expired(self) -> None:
         was_connected = self._islepilot_connected()
         self._islepilot_disconnect()
-        if was_connected: messagebox.showwarning("The-Maps", "Phiên IslePilot đã hết hạn. Đăng nhập lại.")
+        if was_connected: messagebox.showwarning("The-Maps", "Phiên IslePilot đã hết hạn.")
 
     def _apply_islepilot_status(self, status: islepilot.IslePilotStatus) -> None:
         self._islepilot_online = status.online
-        
         self.last_vitals = {
-            "h": getattr(status, 'health', 0),
-            "mh": getattr(status, 'max_health', 1),
-            "s": getattr(status, 'stamina', 0),
-            "ms": getattr(status, 'max_stamina', 1),
-            "w": getattr(status, 'thirst', 0),
-            "mw": getattr(status, 'max_thirst', 1),
-            "f": getattr(status, 'hunger', 0),
-            "mf": getattr(status, 'max_hunger', 1)
+            "h": getattr(status, 'health', 0), "mh": getattr(status, 'max_health', 1),
+            "s": getattr(status, 'stamina', 0), "ms": getattr(status, 'max_stamina', 1),
+            "w": getattr(status, 'thirst', 0), "mw": getattr(status, 'max_thirst', 1),
+            "f": getattr(status, 'hunger', 0), "mf": getattr(status, 'max_hunger', 1)
         }
 
-        if getattr(self, '_hud', None) is None and (status.online or self._local_position_fresh()): self._hud = IslePilotHud(self.root, opacity=self.minimap_opacity)
+        if getattr(self, '_hud', None) is None and (status.online or self._local_position_fresh()): 
+            self._hud = IslePilotHud(self.root, opacity=self.minimap_opacity)
         if getattr(self, '_hud', None) is not None:
             self._hud.update_vitals(status)
             self._hud.update_quests(status)
@@ -1727,10 +1725,7 @@ class MapApp:
             local_live = self._local_position_fresh()
             has_live_source = local_live or getattr(self, '_islepilot_online', False)
             if has_live_source and self._is_game_foreground():
-                show_mm = self.show_minimap_var.get()
-                show_vi = self.show_vitals_var.get()
-                show_qu = self.show_quests_var.get() and getattr(self, '_islepilot_online', False)
-                self._hud.show(show_minimap=show_mm, show_vitals=show_vi, show_quests=show_qu)
+                self._hud.show(show_minimap=self.show_minimap_var.get(), show_vitals=self.show_vitals_var.get(), show_quests=self.show_quests_var.get() and getattr(self, '_islepilot_online', False))
             else: 
                 self._hud.hide()
         self.root.after(FOREGROUND_POLL_MS, self._poll_hud_visibility)
@@ -1750,7 +1745,7 @@ class MapApp:
     def _notify_update_available(self, latest_tag: str) -> None:
         if getattr(self, '_update_notified', False): return
         self._update_notified = True
-        if messagebox.askyesno("The-Maps", f"Đã có bản cập nhật mới trên GitHub ({latest_tag}). Mở trang tải về?"):
+        if messagebox.askyesno("The-Maps", f"Có bản cập nhật mới ({latest_tag}). Tải ngay?"):
             webbrowser.open(GITHUB_RELEASE_PAGE)
 
     def _load_map_image(self) -> None:
@@ -1805,14 +1800,6 @@ class MapApp:
             self._islepilot_heading_deg = None
             self._local_heading_deg = None
         self._show_map()
-
-    def _clamp_view(self) -> None:
-        view_w = view_h = 1.0 / self.zoom
-        max_left, max_top = max(0.0, 1.0 - view_w), max(0.0, 1.0 - view_h)
-        left = min(max(self.center_nx - view_w / 2, 0.0), max_left)
-        top = min(max(self.center_ny - view_h / 2, 0.0), max_top)
-        self.center_nx, self.center_ny = left + view_w / 2, top + view_h / 2
-        self._view = (left, top, view_w, view_h)
 
     def _redraw(self):
         if getattr(self, 'map_visible', False): self._redraw_menu()
@@ -1909,28 +1896,21 @@ class MapApp:
             if is_ingame: self.ig_placeholder_rect = rect
             else: self.m_placeholder_rect = rect
             
-            canvas.create_rectangle(r_left, r_top, r_left + map_width, r_top + map_height, fill="#26343a", outline="#607d8b", width=2)
-            for step in range(1, 10):
-                x = r_left + map_width * step / 10
-                y = r_top + map_height * step / 10
-                canvas.create_line(x, r_top, x, r_top + map_height, fill="#34474f")
-                canvas.create_line(r_left, y, r_left + map_width, y, fill="#34474f")
-            canvas.create_text(c_w / 2, c_h / 2, text=f"{self.profile.name}\nChưa có ảnh map", fill="#b0bec5", font=("Segoe UI", 16), justify="center")
+            canvas.create_rectangle(r_left, r_top, r_left + map_width, r_top + map_height, fill="#121820", outline="#212e3d", width=1.5)
+            canvas.create_text(c_w / 2, c_h / 2, text=f"{self.profile.name}\nChưa có ảnh map", fill="#8395a7", font=("Segoe UI", 14, "bold"), justify="center")
 
         self._draw_zone_toggles_on(canvas, is_ingame)
         
-        # ---------------- Vẽ Animals & Herbs trên Bản Đồ Lớn ----------------
+        # VẼ ANIMALS & HERBS TRÊN MAP LỚN (Áp dụng Position chuẩn)
         if getattr(self, 'local_markers', None):
             for item in self.local_markers:
                 key = item.get("key", "").lower()
                 if self.overlay_vars.get(key) and self.overlay_vars[key].get():
                     color = self.overlay_colors.get(key, "#ffffff")
-                    
                     pos = Position(item.get("x", 0.0), item.get("y", 0.0), 0.0)
                     px, py = self._pixel(pos, is_ingame)
-                    
                     if -10 <= px <= c_w + 10 and -10 <= py <= c_h + 10:
-                        canvas.create_oval(px-3.5, py-3.5, px+3.5, py+3.5, fill=color, outline="black", width=0.8)
+                        canvas.create_oval(px-3.5, py-3.5, px+3.5, py+3.5, fill=color, outline="#000000", width=0.8)
 
         if self.show_regions_var.get() and MAP_LABELS:
             for name, pos, color, size in MAP_LABELS:
@@ -1943,63 +1923,56 @@ class MapApp:
             for position in positions:
                 x, y = self._pixel(position, is_ingame)
                 points.extend((x, y))
-            canvas.create_line(*points, fill="#55a8c9", width=3, joinstyle="round", capstyle="round")
+            canvas.create_line(*points, fill=ACCENT_CYAN, width=2.5, joinstyle="round", capstyle="round")
 
-        # ---------------- Vẽ Ping ----------------
+        # VẼ PING
         if getattr(self, 'is_party_active', False) and getattr(self, 'teammates', None):
             for tid, tdata in self.teammates.items():
                 if tdata.get("ping"):
                     px, py = self._pixel(Position(tdata["ping"]["x"], tdata["ping"]["y"], 0.0), is_ingame)
-                    canvas.create_oval(px-8, py-8, px+8, py+8, fill="#f1c40f", outline="white", width=1.5)
-                    canvas.create_oval(px-15, py-15, px+15, py+15, outline="#f1c40f", width=1.5, dash=(3, 3))
-                    _draw_text_with_outline(canvas, px, py - 22, f"{tdata['name']}", 10, "#f1c40f")
+                    canvas.create_oval(px-8, py-8, px+8, py+8, fill=ACCENT_YELLOW, outline="white", width=1.5)
+                    canvas.create_oval(px-15, py-15, px+15, py+15, outline=ACCENT_YELLOW, width=1.5, dash=(3, 3))
+                    _draw_text_with_outline(canvas, px, py - 22, f"{tdata['name']}", 9, ACCENT_YELLOW)
 
         if getattr(self, 'my_active_ping', None):
             px, py = self._pixel(self.my_active_ping["pos"], is_ingame)
-            canvas.create_oval(px-8, py-8, px+8, py+8, fill="#3498db", outline="white", width=1.5)
-            canvas.create_oval(px-15, py-15, px+15, py+15, outline="#3498db", width=1.5, dash=(3, 3))
-            _draw_text_with_outline(canvas, px, py - 22, "Ping của bạn", 10, "#3498db")
+            canvas.create_oval(px-8, py-8, px+8, py+8, fill=ACCENT_CYAN, outline="white", width=1.5)
+            canvas.create_oval(px-15, py-15, px+15, py+15, outline=ACCENT_CYAN, width=1.5, dash=(3, 3))
+            _draw_text_with_outline(canvas, px, py - 22, "Ping bạn", 9, ACCENT_CYAN)
 
-        # ---------------- Vẽ Vị trí Đồng Đội & Thanh Sinh Tồn ----------------
+        # VẼ ĐỒNG ĐỘI
         if getattr(self, 'is_party_active', False) and getattr(self, 'teammates', None):
             try:
                 for tid, tdata in self.teammates.items():
                     if not tdata.get("has_pos"): continue
-                    tpos = tdata["pos"]
-                    tyaw = tdata["yaw"]
-                    tname = tdata["name"]
-                    tvitals = tdata.get("vitals")
-                    tx, ty = self._pixel(tpos, is_ingame)
-                    
-                    _draw_heading_polygon(canvas, tx, ty, tyaw, 14, "#2ecc71")
-                    canvas.create_oval(tx - 6, ty - 6, tx + 6, ty + 6, fill="#27ae60", outline="white", width=1)
-                    _draw_text_with_outline(canvas, tx, ty + 18, tname, 9, "#2ecc71")
+                    tx, ty = self._pixel(tdata["pos"], is_ingame)
+                    _draw_heading_polygon(canvas, tx, ty, tdata["yaw"], 13, ACCENT_GREEN)
+                    canvas.create_oval(tx - 5, ty - 5, tx + 5, ty + 5, fill="#10ac84", outline="white", width=1)
+                    _draw_text_with_outline(canvas, tx, ty + 16, tdata["name"], 8, ACCENT_GREEN)
 
+                    tvitals = tdata.get("vitals")
                     if tvitals and getattr(self, 'show_teammate_vitals_map_var', None) and self.show_teammate_vitals_map_var.get():
-                        bar_w = 30
-                        bar_h = 3
-                        start_y = ty + 28
+                        bar_w, bar_h, start_y = 28, 3, ty + 24
                         def draw_mini_bar(val, max_val, color, offset_y):
                             if not max_val: max_val = 1
                             fraction = max(0.0, min(1.0, val / max_val))
-                            canvas.create_rectangle(tx - bar_w/2, start_y + offset_y, tx + bar_w/2, start_y + offset_y + bar_h, fill="#26343a", outline="")
+                            canvas.create_rectangle(tx - bar_w/2, start_y + offset_y, tx + bar_w/2, start_y + offset_y + bar_h, fill="#0c1015", outline="")
                             if fraction > 0:
                                 canvas.create_rectangle(tx - bar_w/2, start_y + offset_y, tx - bar_w/2 + (bar_w * fraction), start_y + offset_y + bar_h, fill=color, outline="")
 
-                        draw_mini_bar(tvitals.get('h', 0), tvitals.get('mh', 1), "#e74c3c", 0)
-                        draw_mini_bar(tvitals.get('s', 0), tvitals.get('ms', 1), "#f1c40f", 4)
-                        draw_mini_bar(tvitals.get('f', 0), tvitals.get('mf', 1), "#e67e22", 8)
-                        draw_mini_bar(tvitals.get('w', 0), tvitals.get('mw', 1), "#3498db", 12)
-
+                        draw_mini_bar(tvitals.get('h', 0), tvitals.get('mh', 1), ACCENT_RED, 0)
+                        draw_mini_bar(tvitals.get('s', 0), tvitals.get('ms', 1), ACCENT_YELLOW, 4)
+                        draw_mini_bar(tvitals.get('f', 0), tvitals.get('mf', 1), ACCENT_ORANGE, 8)
+                        draw_mini_bar(tvitals.get('w', 0), tvitals.get('mw', 1), "#0984e3", 12)
             except Exception: pass
 
         if self.current:
             heading = self._current_heading_degrees()
             x, y = self._pixel(self.current, is_ingame)
             if heading is None: 
-                canvas.create_oval(x - 12, y - 12, x + 12, y + 12, fill="#ff5b45", outline="white", width=2)
+                canvas.create_oval(x - 10, y - 10, x + 10, y + 10, fill=ACCENT_RED, outline="white", width=2)
             else:
-                _draw_heading_polygon(canvas, x, y, heading, 14, "#ff5b45")
+                _draw_heading_polygon(canvas, x, y, heading, 13, ACCENT_RED)
 
     def _pixel(self, position: Position, is_ingame: bool) -> tuple[float, float]:
         nx, ny = self.profile.to_normalized(position)
@@ -2027,23 +2000,21 @@ class MapApp:
     def _draw_zone_toggles_on(self, canvas: tk.Canvas, is_ingame: bool) -> None:
         hitboxes = {}
         if not getattr(self, '_zone_images', None): return
-        margin, chip_h = 12, 26
+        margin, chip_h = 14, 26
         x, y = margin, canvas.winfo_height() - margin - chip_h
         for key, label, _filename, color in ZONE_LAYERS:
             if key not in self._zone_images: continue
             active = self._zone_visible.get(key, False)
-            text = f"{'✓' if active else '○'} {label}"
-            text_id = canvas.create_text(x + 10, y + chip_h / 2, text=text, fill="#10191d" if active else "#cfd8dc", font=("Segoe UI", 9, "bold"), anchor="w")
+            text = f"{'■' if active else '□'} {label.upper()}"
+            text_id = canvas.create_text(x + 10, y + chip_h / 2, text=text, fill="#ffffff" if active else "#8395a7", font=("Segoe UI", 8, "bold"), anchor="w")
             bbox = canvas.bbox(text_id)
             chip_w = (bbox[2] - bbox[0]) + 20 if bbox else 90
-            rect_id = canvas.create_rectangle(x, y, x + chip_w, y + chip_h, fill=color if active else "#1b262c", outline=color, width=1.5)
+            rect_id = canvas.create_rectangle(x, y, x + chip_w, y + chip_h, fill=color if active else "#141b24", outline=color if active else "#212e3d", width=1.2)
             canvas.tag_lower(rect_id, text_id)
             hitboxes[key] = (x, y, x + chip_w, y + chip_h)
-            x += chip_w + 8
-        if is_ingame:
-            self._ig_zone_toggle_hitboxes = hitboxes
-        else:
-            self._m_zone_toggle_hitboxes = hitboxes
+            x += chip_w + 6
+        if is_ingame: self._ig_zone_toggle_hitboxes = hitboxes
+        else: self._m_zone_toggle_hitboxes = hitboxes
 
     def _current_heading_degrees(self) -> float | None:
         if self._local_position_fresh() and getattr(self, '_local_heading_deg', None) is not None: return self._local_heading_deg
@@ -2058,8 +2029,7 @@ class MapApp:
         return None
 
     def _schedule_hq_redraw_menu(self):
-        if getattr(self, '_m_pending_hq_job', None):
-            self.root.after_cancel(self._m_pending_hq_job)
+        if getattr(self, '_m_pending_hq_job', None): self.root.after_cancel(self._m_pending_hq_job)
         self._m_pending_hq_job = self.root.after(HQ_REDRAW_DELAY_MS, self._hq_redraw_menu)
         
     def _hq_redraw_menu(self):
@@ -2067,8 +2037,7 @@ class MapApp:
         self._redraw_menu()
 
     def _schedule_hq_redraw_ingame(self):
-        if getattr(self, '_ig_pending_hq_job', None):
-            self.root.after_cancel(self._ig_pending_hq_job)
+        if getattr(self, '_ig_pending_hq_job', None): self.root.after_cancel(self._ig_pending_hq_job)
         self._ig_pending_hq_job = self.root.after(HQ_REDRAW_DELAY_MS, self._hq_redraw_ingame)
         
     def _hq_redraw_ingame(self):

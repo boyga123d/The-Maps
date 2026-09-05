@@ -5,7 +5,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('config.json', '.'), ('maps', 'maps')],
+    datas=[('config.json', '.'), ('maps', 'maps'), ('extracted_foods.json', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
