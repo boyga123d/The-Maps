@@ -1368,6 +1368,13 @@ class MapApp:
         self._local_session: localtelemetry.LocalMovementSession | None = None
         self._local_state = "starting"
         self._local_last_update = 0.0
+
+        # A movement packet may stop arriving while the dinosaur is standing
+        # completely still. Keep track of whether local telemetry has already
+        # supplied a valid position so HUD visibility does not depend only on
+        # the 2-second "fresh packet" window.
+        self._local_has_position = False
+
         self._local_heading_deg: float | None = None
         self._local_trail_last_update = 0.0
         self._npcap_prompted = False
@@ -2799,8 +2806,20 @@ class MapApp:
             self._local_session.stop()
             self._local_session = None
 
+        self._local_has_position = False
+
     def _set_local_state(self, state: str) -> None:
         self._local_state = state
+
+        # "waiting_packets" is intentionally NOT included here:
+        # when the player is stationary there may simply be no new movement
+        # packet, and the last known position remains valid for HUD display.
+        if state in {
+            "waiting_game",
+            "npcap_missing",
+            "capture_error",
+        }:
+            self._local_has_position = False
 
     def _prompt_for_npcap_if_needed(self) -> None:
         if self._npcap_prompted or localtelemetry.npcap_installed(): return
@@ -2849,6 +2868,7 @@ class MapApp:
     def _apply_local_movement(self, sample: localtelemetry.LocalMovementSample) -> None:
         self._local_last_update = time.monotonic()
         self._local_state = "tracking"
+        self._local_has_position = True
         position = Position(sample.y, sample.x, sample.z)
         
         if position != self.current and self._local_last_update - self._local_trail_last_update >= LOCAL_TRAIL_MIN_INTERVAL_SECONDS:
@@ -2978,7 +2998,19 @@ class MapApp:
             self._redraw()
 
         local_live = self._local_position_fresh()
-        has_live_source = local_live or getattr(self, '_islepilot_online', False)
+
+        # Visibility must not depend on receiving a movement packet every
+        # 2 seconds. Once local telemetry has obtained a position, keep HUD
+        # visible while the source is still valid. _local_position_fresh()
+        # remains unchanged for telemetry arbitration elsewhere.
+        local_hud_available = bool(
+            getattr(self, "_local_has_position", False)
+        )
+        has_live_source = (
+            local_hud_available
+            or getattr(self, '_islepilot_online', False)
+        )
+
         focus_allowed = self._focus_allows_hud()
 
         # In-game Map dùng cùng rule với HUD.
