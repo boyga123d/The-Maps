@@ -84,6 +84,7 @@ MAX_HISTORY_POINTS = 100
 ZONE_LAYERS: tuple[tuple[str, str, str, str], ...] = (
     # ("migrations", "Migration", "zone_migration.png", "#ff9800"),
     ("Nước", "Nước ngọt", "gateway_water.webp", "#09a5e2"),
+    ("Khu tuần tra", "Khu tuần tra", "zone_patrol.png", "#ab47bc"),
     ("400OV", "400 Ô", "number.png", "#1674f0"),
     ("600OV", "600 Ô", "number2.png", "#eef106"),
 )
