@@ -84,6 +84,7 @@ MAX_HISTORY_POINTS = 100
 ZONE_LAYERS: tuple[tuple[str, str, str, str], ...] = (
     # ("migrations", "Migration", "zone_migration.png", "#ff9800"),
     ("Nước", "Nước ngọt", "gateway_water.webp", "#09a5e2"),
+    ("Khu tuần tra", "Khu tuần tra", "zone_patrol.png", "#ab47bc"),
     ("400OV", "400 Ô", "number.png", "#1674f0"),
     ("600OV", "600 Ô", "number2.png", "#eef106"),
 )
@@ -786,8 +787,19 @@ class MiniMapPanel:
         top = min(max(ny - frac / 2, 0.0), 1.0 - frac)
         crop_box = (int(left * width), int(top * height), int((left + frac) * width), int((top + frac) * height))
         cropped = source_image.crop(crop_box).convert("RGBA")
-        for zone_image in zone_images: cropped.alpha_composite(zone_image.crop(crop_box))
-        resized = cropped.resize((MINI_MAP_SIZE, MINI_MAP_SIZE), Image.Resampling.LANCZOS)
+
+        for zone_image in zone_images:
+            if zone_image.size != source_image.size:
+                zone_image = zone_image.resize(
+                    source_image.size,
+                    Image.Resampling.LANCZOS
+                )
+            cropped.alpha_composite(zone_image.crop(crop_box))
+
+        resized = cropped.resize(
+            (MINI_MAP_SIZE, MINI_MAP_SIZE),
+            Image.Resampling.LANCZOS
+        )
         
         if shape == "Tròn":
             mask = Image.new("L", (MINI_MAP_SIZE, MINI_MAP_SIZE), 0)
@@ -2442,13 +2454,42 @@ class MapApp:
         self.m_rendered_size = self.ig_rendered_size = None
         
         if getattr(self.profile, 'image_path', None):
-            try: self.source_image = Image.open(self.profile.image_path).convert("RGB")
-            except (OSError, ValueError): self.source_image = None
-            
+            try:
+                # Ảnh map chính lấy từ "image" trong map.json.
+                # Kích thước thật của ảnh map này là kích thước chuẩn
+                # cho toàn bộ image overlay / ZONE_LAYERS.
+                self.source_image = Image.open(
+                    self.profile.image_path
+                ).convert("RGB")
+            except (OSError, ValueError):
+                self.source_image = None
+
         self._zone_images = {}
+
+        # AUTO RESIZE TẤT CẢ IMAGE LAYER THEO KÍCH THƯỚC MAP
+        map_size = (
+            self.source_image.size
+            if self.source_image is not None
+            else None
+        )
+
         for key, path in self.profile.zone_image_paths.items():
-            try: self._zone_images[key] = Image.open(path).convert("RGBA")
-            except (OSError, ValueError): pass
+            try:
+                layer_image = Image.open(path).convert("RGBA")
+
+                if (
+                    map_size is not None
+                    and layer_image.size != map_size
+                ):
+                    layer_image = layer_image.resize(
+                        map_size,
+                        Image.Resampling.LANCZOS
+                    )
+
+                self._zone_images[key] = layer_image
+
+            except (OSError, ValueError):
+                pass
 
     def _poll_clipboard(self) -> None:
         try:
