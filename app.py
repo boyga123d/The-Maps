@@ -1153,7 +1153,7 @@ class PingDirectionOverlay:
             outline_color=text_outline
         )
 
-    def update(self, profile: MapProfile, player_pos: Position | None, player_heading: float | None, teammates: dict | None, my_ping: dict | None = None, manual_ping: dict | None = None, asset_ping: dict | None = None) -> int:
+    def update(self, profile: MapProfile, player_pos: Position | None, player_heading: float | None, teammates: dict | None, my_ping: dict | None = None, manual_ping: dict | None = None, asset_ping: dict | None = None, extra_pings: list[dict] | None = None) -> int:
         self.canvas.delete("all")
         if player_pos is None or player_heading is None: return 0
         entries = []
@@ -1204,6 +1204,29 @@ class PingDirectionOverlay:
                     expired = False
             if not expired:
                 entries.append((asset_ping["pos"], "Asset Ping", "#000000"))
+
+        if extra_pings:
+            for ping in extra_pings:
+                if not isinstance(ping, dict):
+                    continue
+                pos = ping.get("pos")
+                if not isinstance(pos, Position):
+                    continue
+                expires_at = ping.get("expires_at")
+                if expires_at is not None:
+                    try:
+                        if float(expires_at) <= time.time():
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+
+                entries.append(
+                    (
+                        pos,
+                        str(ping.get("label") or "Local Ping"),
+                        str(ping.get("color") or "#ffffff"),
+                    )
+                )
 
         for i,(p,label,color) in enumerate(entries): self._draw_one(profile, player_pos, float(player_heading), p, label, color, i)
         return len(entries)
@@ -1323,6 +1346,13 @@ class MapApp:
         self.manual_active_ping = None
         self.asset_location_active_ping = None
 
+        # Independent local quick-pings for nearest POIs.
+        # Each category can stay active at the same time.
+        self.quick_poi_pings: dict[str, dict] = {}
+
+        # Cached world points sampled from the Water image layer.
+        self._water_search_points: list[Position] = []
+
         self.m_zoom = MIN_ZOOM
         self.m_center_nx = 0.5
         self.m_center_ny = 0.5
@@ -1388,7 +1418,13 @@ class MapApp:
         self._ingame_map_focus_hidden = False
 
         self.local_markers: list[dict] = []
-        self.gateway_pois: dict[str, list[dict]] = {"sanctuaries": [], "migrations": [], "patrol_zones": [], "salt_licks": []}
+        self.gateway_pois: dict[str, list[dict]] = {
+            "sanctuaries": [],
+            "migrations": [],
+            "patrol_zones": [],
+            "salt_licks": [],
+            "water": [],
+        }
         self.overlay_vars: dict[str, ctk.BooleanVar] = {}
         self.overlay_colors: dict[str, str] = {}
         self.animal_keys: list[str] = []
@@ -1520,9 +1556,16 @@ class MapApp:
                 "migrations": list(data.get("migrations", []) or []),
                 "patrol_zones": list(data.get("patrol_zones", []) or []),
                 "salt_licks": list(data.get("salt_licks", []) or []),
+                "water": list(data.get("water", []) or []),
             }
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            self.gateway_pois = {"sanctuaries": [], "migrations": [], "patrol_zones": [], "salt_licks": []}
+            self.gateway_pois = {
+                "sanctuaries": [],
+                "migrations": [],
+                "patrol_zones": [],
+                "salt_licks": [],
+                "water": [],
+            }
 
     def _load_local_animal_herbs(self):
         json_file = LOCAL_JSON_PATH if LOCAL_JSON_PATH.exists() else LOCAL_JSON_FALLBACK
@@ -2091,6 +2134,73 @@ class MapApp:
             before=manual_ping_frame
         )
         self._update_teammates_ui()
+
+        # CARD: PING NHANH ĐIỂM GẦN NHẤT
+        card_quick_ping = ctk.CTkFrame(
+            self.control_frame,
+            fg_color=CARD_BG,
+            border_width=1,
+            border_color=CARD_BORDER,
+            corner_radius=10
+        )
+        card_quick_ping.pack(fill="x", padx=16, pady=4)
+
+        ctk.CTkLabel(
+            card_quick_ping,
+            text="PING NHANH GẦN NHẤT",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=ACCENT_CYAN
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+
+        ctk.CTkLabel(
+            card_quick_ping,
+            text="Dùng thời gian H:M:S của Manual/Local Ping",
+            text_color=TEXT_MUTED,
+            font=ctk.CTkFont(size=9)
+        ).pack(anchor="w", padx=12, pady=(0, 5))
+
+        quick_grid = ctk.CTkFrame(
+            card_quick_ping,
+            fg_color="transparent"
+        )
+        quick_grid.pack(fill="x", padx=10, pady=(0, 9))
+        quick_grid.grid_columnconfigure((0, 1), weight=1)
+
+        ctk.CTkButton(
+            quick_grid,
+            text="PING WATER",
+            height=28,
+            fg_color="#067a9c",
+            hover_color="#099ac2",
+            command=lambda: self._create_nearest_quick_ping("water")
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 3), pady=3)
+
+        ctk.CTkButton(
+            quick_grid,
+            text="PING SALT",
+            height=28,
+            fg_color="#8a7410",
+            hover_color="#a98d12",
+            command=lambda: self._create_nearest_quick_ping("salt")
+        ).grid(row=0, column=1, sticky="ew", padx=(3, 0), pady=3)
+
+        ctk.CTkButton(
+            quick_grid,
+            text="PING SANCTUARY",
+            height=28,
+            fg_color="#147a5d",
+            hover_color="#17936f",
+            command=lambda: self._create_nearest_quick_ping("sanctuary")
+        ).grid(row=1, column=0, sticky="ew", padx=(0, 3), pady=3)
+
+        ctk.CTkButton(
+            quick_grid,
+            text="PING MIGRATION",
+            height=28,
+            fg_color="#9b5b18",
+            hover_color="#b76b1b",
+            command=lambda: self._create_nearest_quick_ping("migration")
+        ).grid(row=1, column=1, sticky="ew", padx=(3, 0), pady=3)
 
         # CARD 5: BẢN ĐỒ & HỆ THỐNG TELEMETRY
         card_sys = ctk.CTkFrame(self.control_frame, fg_color=CARD_BG, border_width=1, border_color=CARD_BORDER, corner_radius=10)
@@ -2997,6 +3107,12 @@ class MapApp:
             self.asset_location_active_ping = None
             self._redraw()
 
+        # Expire independent nearest-POI quick pings.
+        quick_count_before = len(self.quick_poi_pings)
+        self._active_quick_poi_pings()
+        if len(self.quick_poi_pings) != quick_count_before:
+            self._redraw()
+
         local_live = self._local_position_fresh()
 
         # Visibility must not depend on receiving a movement packet every
@@ -3054,7 +3170,8 @@ class MapApp:
                     self.teammates if self.is_party_active else {},
                     self.my_active_ping,
                     self.manual_active_ping,
-                    self.asset_location_active_ping
+                    self.asset_location_active_ping,
+                    self._active_quick_poi_pings()
                 )
                 if count > 0:
                     ping_hud.show()
@@ -3140,6 +3257,399 @@ class MapApp:
 
             except (OSError, ValueError):
                 pass
+
+        # Prepare nearest-Water search points whenever map/profile changes.
+        self._build_water_search_cache()
+
+    def _build_water_search_cache(self) -> None:
+        """
+        Build a lightweight cache of world-space Water points from the
+        Nước/gateway_water.webp image layer.
+
+        The layer can be either transparent or black-background cyan.
+        It is downsampled only for nearest-point searching; rendering is
+        untouched.
+        """
+        self._water_search_points = []
+
+        layer = getattr(self, "_zone_images", {}).get("Nước")
+        if layer is None:
+            return
+
+        try:
+            source = layer.convert("RGBA")
+            width, height = source.size
+            if width <= 0 or height <= 0:
+                return
+
+            # Around 700px on the longest edge gives roughly 10-20m
+            # search precision on Gateway while keeping searches fast.
+            max_dim = 700
+            scale = min(1.0, max_dim / float(max(width, height)))
+            sw = max(1, int(round(width * scale)))
+            sh = max(1, int(round(height * scale)))
+
+            small = source.resize(
+                (sw, sh),
+                Image.Resampling.BILINEAR
+            )
+
+            pixels = small.load()
+            points: list[Position] = []
+
+            for py in range(sh):
+                ny = (py + 0.5) / sh
+
+                for px in range(sw):
+                    r, g, b, a = pixels[px, py]
+
+                    # Support both:
+                    # 1) transparent cyan water layer
+                    # 2) opaque black background + cyan water
+                    transparent_water = (
+                        a >= 30
+                        and (g >= 70 or b >= 90)
+                        and (g + b) >= (r * 1.6 + 80)
+                    )
+
+                    cyan_on_black = (
+                        g >= 85
+                        and b >= 105
+                        and b >= r + 45
+                        and g >= r + 35
+                    )
+
+                    if not (transparent_water or cyan_on_black):
+                        continue
+
+                    nx = (px + 0.5) / sw
+                    wx, wy = self.profile.from_normalized(nx, ny)
+                    points.append(Position(wx, wy, 0.0))
+
+            self._water_search_points = points
+
+        except Exception:
+            self._water_search_points = []
+
+    @staticmethod
+    def _closest_point_on_segment(
+        px: float,
+        py: float,
+        ax: float,
+        ay: float,
+        bx: float,
+        by: float,
+    ) -> tuple[float, float]:
+        abx = bx - ax
+        aby = by - ay
+        length_sq = abx * abx + aby * aby
+
+        if length_sq <= 1e-12:
+            return ax, ay
+
+        t = ((px - ax) * abx + (py - ay) * aby) / length_sq
+        t = max(0.0, min(1.0, t))
+
+        return (
+            ax + abx * t,
+            ay + aby * t,
+        )
+
+    @staticmethod
+    def _point_inside_polygon(
+        px: float,
+        py: float,
+        points: list[tuple[float, float]],
+    ) -> bool:
+        if len(points) < 3:
+            return False
+
+        inside = False
+        j = len(points) - 1
+
+        for i in range(len(points)):
+            xi, yi = points[i]
+            xj, yj = points[j]
+
+            intersects = (
+                ((yi > py) != (yj > py))
+                and (
+                    px
+                    < (xj - xi) * (py - yi)
+                    / ((yj - yi) if abs(yj - yi) > 1e-12 else 1e-12)
+                    + xi
+                )
+            )
+
+            if intersects:
+                inside = not inside
+
+            j = i
+
+        return inside
+
+    def _nearest_position_from_poi_items(
+        self,
+        origin: Position,
+        items: list[dict],
+    ) -> tuple[Position | None, str]:
+        """
+        Find the nearest actual point of a POI collection.
+
+        - point/text POI -> its x/y
+        - line/path -> closest point on any polyline segment
+        - closed polygon -> distance 0 when player is inside
+        - ellipse/circle -> nearest sampled boundary, or origin if inside
+        """
+        best_pos: Position | None = None
+        best_name = ""
+        best_d2 = float("inf")
+
+        ox = float(origin.x)
+        oy = float(origin.y)
+
+        def consider(wx: float, wy: float, name: str) -> None:
+            nonlocal best_pos, best_name, best_d2
+            dx = wx - ox
+            dy = wy - oy
+            d2 = dx * dx + dy * dy
+
+            if d2 < best_d2:
+                best_d2 = d2
+                best_pos = Position(wx, wy, 0.0)
+                best_name = name
+
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+
+            name = str(item.get("name") or "POI")
+            polyline = item.get("polyline")
+
+            # --------------------------------------------
+            # PATH / LINE
+            # --------------------------------------------
+            if isinstance(polyline, list) and len(polyline) >= 2:
+                pts: list[tuple[float, float]] = []
+
+                for pair in polyline:
+                    if (
+                        isinstance(pair, (list, tuple))
+                        and len(pair) >= 2
+                    ):
+                        try:
+                            pts.append(
+                                (float(pair[0]), float(pair[1]))
+                            )
+                        except (TypeError, ValueError):
+                            pass
+
+                if len(pts) >= 2:
+                    # If it is a closed zone and the player is already
+                    # inside, the nearest point is effectively here.
+                    closed = (
+                        len(pts) >= 3
+                        and abs(pts[0][0] - pts[-1][0]) < 1e-6
+                        and abs(pts[0][1] - pts[-1][1]) < 1e-6
+                    )
+
+                    if closed and self._point_inside_polygon(
+                        ox, oy, pts
+                    ):
+                        consider(ox, oy, name)
+                        continue
+
+                    for a, b in zip(pts, pts[1:]):
+                        qx, qy = self._closest_point_on_segment(
+                            ox, oy,
+                            a[0], a[1],
+                            b[0], b[1],
+                        )
+                        consider(qx, qy, name)
+
+                    continue
+
+            # --------------------------------------------
+            # ELLIPSE / CIRCLE
+            # --------------------------------------------
+            radii = item.get("radii")
+            if isinstance(radii, dict):
+                try:
+                    cx = float(item.get("x", 0.0))
+                    cy = float(item.get("y", 0.0))
+                    rx = (
+                        float(radii.get("rx", 0.0))
+                        * POI_RADIUS_WORLD_SCALE
+                    )
+                    ry = (
+                        float(radii.get("ry", radii.get("rx", 0.0)))
+                        * POI_RADIUS_WORLD_SCALE
+                    )
+                    rot = math.radians(
+                        float(radii.get("rot", 0.0))
+                    )
+                except (TypeError, ValueError):
+                    rx = ry = 0.0
+
+                if rx > 0.0 and ry > 0.0:
+                    cos_r = math.cos(rot)
+                    sin_r = math.sin(rot)
+
+                    # Transform player into local ellipse space.
+                    dx = ox - cx
+                    dy = oy - cy
+                    lx = dx * cos_r + dy * sin_r
+                    ly = -dx * sin_r + dy * cos_r
+
+                    ellipse_value = (
+                        (lx * lx) / (rx * rx)
+                        + (ly * ly) / (ry * ry)
+                    )
+
+                    if ellipse_value <= 1.0:
+                        consider(ox, oy, name)
+                        continue
+
+                    # Sampling boundary is stable and accurate enough for
+                    # these relatively small zones.
+                    for i in range(96):
+                        angle = (i / 96.0) * math.tau
+                        ex = math.cos(angle) * rx
+                        ey = math.sin(angle) * ry
+
+                        wx = cx + ex * cos_r - ey * sin_r
+                        wy = cy + ex * sin_r + ey * cos_r
+                        consider(wx, wy, name)
+
+                    continue
+
+            # --------------------------------------------
+            # NORMAL POINT
+            # --------------------------------------------
+            try:
+                consider(
+                    float(item["x"]),
+                    float(item["y"]),
+                    name,
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        return best_pos, best_name
+
+    def _nearest_quick_ping_target(
+        self,
+        category: str,
+    ) -> tuple[Position | None, str]:
+        origin = self.current
+        if origin is None:
+            return None, ""
+
+        if category == "water":
+            points = getattr(self, "_water_search_points", [])
+
+            # Prefer the actual Water image mask.
+            if points:
+                best = min(
+                    points,
+                    key=lambda p: (
+                        (p.x - origin.x) ** 2
+                        + (p.y - origin.y) ** 2
+                    )
+                )
+                return best, "Water"
+
+            # Safe fallback if gateway_water.webp is unavailable.
+            return self._nearest_position_from_poi_items(
+                origin,
+                list(self.gateway_pois.get("water", []) or []),
+            )
+
+        key_map = {
+            "salt": "salt_licks",
+            "sanctuary": "sanctuaries",
+            "migration": "migrations",
+        }
+
+        json_key = key_map.get(category)
+        if not json_key:
+            return None, ""
+
+        return self._nearest_position_from_poi_items(
+            origin,
+            list(self.gateway_pois.get(json_key, []) or []),
+        )
+
+    def _quick_ping_color(self, category: str) -> str:
+        return {
+            "water": ACCENT_CYAN,
+            "salt": ACCENT_YELLOW,
+            "sanctuary": ACCENT_GREEN,
+            "migration": ACCENT_ORANGE,
+        }.get(category, "#ffffff")
+
+    def _quick_ping_label(self, category: str) -> str:
+        return {
+            "water": "Water",
+            "salt": "Salt",
+            "sanctuary": "Sanctuary",
+            "migration": "Migration",
+        }.get(category, category.title())
+
+    def _create_nearest_quick_ping(self, category: str) -> None:
+        if self.current is None:
+            messagebox.showwarning(
+                "Ping gần nhất",
+                "Chưa có vị trí hiện tại của bạn."
+            )
+            return
+
+        target, poi_name = self._nearest_quick_ping_target(category)
+
+        if target is None:
+            messagebox.showwarning(
+                "Ping gần nhất",
+                f"Không tìm thấy dữ liệu {self._quick_ping_label(category)}."
+            )
+            return
+
+        # Local quick POI ping uses the Manual/Local H:M:S duration.
+        duration_seconds = self._get_manual_ping_duration_seconds()
+        now = time.time()
+
+        self.quick_poi_pings[category] = {
+            "pos": target,
+            "created_at": now,
+            "expires_at": now + duration_seconds,
+            "duration_seconds": duration_seconds,
+            "duration_min": duration_seconds / 60.0,
+            "label": self._quick_ping_label(category),
+            "poi_name": poi_name,
+            "color": self._quick_ping_color(category),
+        }
+
+        self._redraw()
+        self._apply_focus_visibility()
+
+    def _clear_quick_poi_ping(self, category: str) -> None:
+        self.quick_poi_pings.pop(category, None)
+        self._redraw()
+        self._apply_focus_visibility()
+
+    def _active_quick_poi_pings(self) -> list[dict]:
+        now = time.time()
+        active = []
+
+        for category in list(self.quick_poi_pings):
+            ping = self.quick_poi_pings.get(category)
+
+            if not ping or self._ping_is_expired(ping, now):
+                self.quick_poi_pings.pop(category, None)
+                continue
+
+            active.append(ping)
+
+        return active
 
     def _poll_clipboard(self) -> None:
         try:
@@ -3474,6 +3984,56 @@ class MapApp:
                     asset_label, 9, "#000000", outline_color="#ffffff"
                 )
 
+        # Independent nearest-POI quick pings.
+        for quick_ping in self._active_quick_poi_pings():
+            qpos = quick_ping.get("pos")
+            if not isinstance(qpos, Position):
+                continue
+
+            qx, qy = self._pixel(qpos, is_ingame)
+            if not _point_in_rect(qx, qy, overlay_clip_rect, 15.0):
+                continue
+
+            qcolor = str(quick_ping.get("color") or "#ffffff")
+            qlabel = str(quick_ping.get("label") or "POI")
+
+            canvas.create_oval(
+                qx - 7, qy - 7,
+                qx + 7, qy + 7,
+                fill=qcolor,
+                outline="#ffffff",
+                width=1.5
+            )
+            canvas.create_oval(
+                qx - 14, qy - 14,
+                qx + 14, qy + 14,
+                outline=qcolor,
+                width=1.5,
+                dash=(3, 3)
+            )
+
+            remain = max(
+                0,
+                int(float(quick_ping["expires_at"]) - time.time())
+            )
+            hh, rem = divmod(remain, 3600)
+            mm, ss = divmod(rem, 60)
+            text_label = f"{qlabel} • {hh:02d}:{mm:02d}:{ss:02d}"
+
+            lx, ly = _clamp_text_to_rect(
+                qx, qy - 22,
+                text_label, 9,
+                *overlay_clip_rect,
+                padding=4.0
+            )
+            _draw_text_with_outline(
+                canvas,
+                lx, ly,
+                text_label,
+                9,
+                qcolor
+            )
+
         # VẼ ĐỒNG ĐỘI
         if getattr(self, 'is_party_active', False) and getattr(self, 'teammates', None):
             try:
@@ -3709,6 +4269,51 @@ class MapApp:
             hitboxes[asset_key] = (x, y, x + asset_chip_w, y + chip_h)
             x += asset_chip_w + gap
 
+        for category, quick_ping in list(self.quick_poi_pings.items()):
+            if self._ping_is_expired(quick_ping):
+                continue
+
+            clear_key = f"__clear_quick_{category}__"
+            clear_text = f"✕ {self._quick_ping_label(category).upper()}"
+            clear_color = self._quick_ping_color(category)
+
+            probe = canvas.create_text(
+                -10000, -10000,
+                text=clear_text,
+                font=("Segoe UI", 8, "bold"),
+                anchor="w"
+            )
+            bbox = canvas.bbox(probe)
+            canvas.delete(probe)
+            quick_chip_w = (bbox[2] - bbox[0]) + 20 if bbox else 90
+
+            if x + quick_chip_w > canvas_w - margin and x > margin:
+                x = margin
+                y -= chip_h + gap
+
+            quick_text_id = canvas.create_text(
+                x + 10,
+                y + chip_h / 2,
+                text=clear_text,
+                fill="#ffffff",
+                font=("Segoe UI", 8, "bold"),
+                anchor="w"
+            )
+            quick_rect_id = canvas.create_rectangle(
+                x, y,
+                x + quick_chip_w, y + chip_h,
+                fill=clear_color,
+                outline="#ffffff",
+                width=1.2
+            )
+            canvas.tag_lower(quick_rect_id, quick_text_id)
+
+            hitboxes[clear_key] = (
+                x, y,
+                x + quick_chip_w, y + chip_h
+            )
+            x += quick_chip_w + gap
+
         if is_ingame:
             self._ig_zone_toggle_hitboxes = hitboxes
         else:
@@ -3793,6 +4398,10 @@ class MapApp:
                     return
                 if key == "__clear_asset_ping__":
                     self._clear_asset_location_ping()
+                    return
+                if key.startswith("__clear_quick_") and key.endswith("__"):
+                    category = key[len("__clear_quick_"):-2]
+                    self._clear_quick_poi_ping(category)
                     return
                 self._zone_visible[key] = not self._zone_visible[key]
                 self._redraw()
