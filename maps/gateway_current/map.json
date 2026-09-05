@@ -1,7 +1,7 @@
 {
   "id": "gateway-v0.21.7",
   "name": "Evrima — Gateway v0.21.772",
-  "image": "map.webp",
+  "image": "gateway.webp",
   "source": "https://vulnona.com/game/map/#map=Gateway_v0.21.7",
   "world_bounds": {
     "min_x": -607000,
