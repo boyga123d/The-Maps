@@ -524,7 +524,7 @@ class QuestPanel:
         self._bind_drag(self.lbl_title)
 
         self._rows: list[tuple[tk.Label, tk.Label]] = []
-        for _ in range(8):
+        for _ in range(10):
             row = tk.Frame(self.main_frame, bg=HUD_BG)
             row.pack(fill="x", padx=8, pady=1)
             check = tk.Label(row, text="", fg="#57606f", bg=HUD_BG, font=("Segoe UI", 9, "bold"), width=2)
