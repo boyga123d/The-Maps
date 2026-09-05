@@ -52,6 +52,12 @@ CONFIG_PATH = DATA_ROOT / "config.json"
 CONFIG_SV_PATH = DATA_ROOT / "configsv.json"
 LOCAL_JSON_PATH = RESOURCE_ROOT / "extracted_foods.json"
 LOCAL_JSON_FALLBACK = DATA_ROOT / "extracted_foods.json"
+
+# --- ADD-ONLY: extra Gateway POI overlay (does not replace/modify existing layers) ---
+GATEWAY_POI_JSON_PATH = RESOURCE_ROOT / "gateway_pois.json"
+GATEWAY_POI_JSON_FALLBACK = DATA_ROOT / "gateway_pois.json"
+POI_RADIUS_WORLD_SCALE = 1000.0
+
 APP_ICON_ICO = RESOURCE_ROOT / "assets" / "the_maps.ico"
 APP_ICON_PNG = RESOURCE_ROOT / "assets" / "the_maps.png"
 YOUTUBE_URL = "https://www.youtube.com/@GlobalDailyHighlights"
@@ -76,11 +82,26 @@ HQ_REDRAW_DELAY_MS = 120
 MAX_HISTORY_POINTS = 100
 
 ZONE_LAYERS: tuple[tuple[str, str, str, str], ...] = (
-    ("migrations", "Migration", "zone_migration.png", "#ff9800"),
-    ("patrol_zones", "Patrol", "zone_patrol.png", "#ab47bc"),
+    # ("migrations", "Migration", "zone_migration.png", "#ff9800"),
+    ("Nước", "Nước ngọt", "gateway_water.webp", "#09a5e2"),
     ("400OV", "400 Ô", "number.png", "#1674f0"),
     ("600OV", "600 Ô", "number2.png", "#eef106"),
 )
+POI_COLORS = {
+    "sanctuaries": "#2ecc71",
+    "migrations": "#ff9800",
+    "patrol_zones": "#ab47bc",
+    "salt_licks": "#f1da0a",
+}
+# ADD-ONLY: các POI JSON có toggle riêng trên map, không đụng key/layer ảnh cũ.
+POI_ZONE_LAYERS: tuple[tuple[str, str, str, str], ...] = (
+    ("poi_sanctuaries", "Sanctuary", "", POI_COLORS["sanctuaries"]),
+    ("poi_migrations", "Migration", "", POI_COLORS["migrations"]),
+    ("poi_patrol_zones", "Patrol", "", POI_COLORS["patrol_zones"]),
+    ("poi_salt", "Salt", "", POI_COLORS["salt_licks"]),
+)
+
+MAP_TOGGLE_LAYERS = ZONE_LAYERS + POI_ZONE_LAYERS
 
 @dataclass(frozen=True)
 class Position:
@@ -210,6 +231,168 @@ def _draw_text_with_outline(canvas: tk.Canvas, x: float, y: float, text: str, fo
     for dx, dy in ((-1,-1), (1,-1), (-1,1), (1,1)):
         canvas.create_text(x+dx, y+dy, text=text, fill=outline_color, font=font_spec, justify="center")
     canvas.create_text(x, y, text=text, fill=fill_color, font=font_spec, justify="center")
+
+def _draw_gateway_pois(canvas: tk.Canvas, profile: MapProfile, poi_data: dict, world_to_screen, *, hud: bool = False, visible: dict[str, bool] | None = None) -> None:
+    """Draw ONLY the extra JSON POIs; existing map/layers remain untouched."""
+    if not poi_data:
+        return
+
+    visible = visible or {}
+    show_sanctuaries = visible.get("poi_sanctuaries", True)
+    show_migrations = visible.get("poi_migrations", True)
+    show_patrol_zones = visible.get("poi_patrol_zones", True)
+    show_salt = visible.get("poi_salt", True)
+
+    def pt(x: float, y: float) -> tuple[float, float]:
+        return world_to_screen(Position(float(x), float(y), 0.0))
+
+    # Sanctuary: same diamond icon style as Salt, but with its own color.
+    if show_sanctuaries:
+        sanctuary_color = POI_COLORS["sanctuaries"]
+        sanctuary_size = 4 if hud else 6
+        for item in poi_data.get("sanctuaries", []):
+            sx, sy = pt(item.get("x", 0.0), item.get("y", 0.0))
+            canvas.create_polygon(
+                sx, sy-sanctuary_size, sx+sanctuary_size, sy,
+                sx, sy+sanctuary_size, sx-sanctuary_size, sy,
+                fill=sanctuary_color, outline="#2f3640", width=1
+            )
+
+    # Migrations: preserve line/path/circle geometry from JSON and obey toggle.
+    if show_migrations:
+        for item in poi_data.get("migrations", []):
+            color = POI_COLORS["migrations"]
+            kind = str(item.get("kind", "")).lower()
+            polyline = item.get("polyline") or []
+            if polyline and kind in {"path", "line"}:
+                coords = []
+                for pair in polyline:
+                    if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                        sx, sy = pt(pair[0], pair[1])
+                        coords.extend((sx, sy))
+                if len(coords) >= 4:
+                    canvas.create_line(
+                        *coords, fill=color, width=2.4 if not hud else 1.7,
+                        joinstyle="round", capstyle="round"
+                    )
+            else:
+                radii = item.get("radii") or {}
+                rx = float(radii.get("rx", 8.0)) * POI_RADIUS_WORLD_SCALE
+                ry = float(radii.get("ry", radii.get("rx", 8.0))) * POI_RADIUS_WORLD_SCALE
+                rot = math.radians(float(radii.get("rot", 0.0)))
+                cx, cy = float(item.get("x", 0.0)), float(item.get("y", 0.0))
+                coords = []
+                for i in range(49):
+                    a = (i / 48.0) * math.tau
+                    lx, ly = math.cos(a) * rx, math.sin(a) * ry
+                    wx = cx + lx * math.cos(rot) - ly * math.sin(rot)
+                    wy = cy + lx * math.sin(rot) + ly * math.cos(rot)
+                    sx, sy = pt(wx, wy)
+                    coords.extend((sx, sy))
+                canvas.create_line(
+                    *coords, fill=color, width=2.4 if not hud else 1.7, smooth=True
+                )
+
+    # Patrol Zones: some JSON entries contain several closed sub-paths in one
+    # polyline.  Never join the end of one closed patrol shape to the next one.
+    def split_patrol_polyline(polyline):
+        """Split Vulnona patrol polylines into independent open/closed shapes.
+
+        Some entries (notably Delta) are encoded as:
+          open points..., A, ..., A, B, ..., B
+        where each repeated vertex closes only the loop that started at its
+        first occurrence.  The points before A are a separate open segment and
+        must NOT be connected into that loop.
+        """
+        points = []
+        for pair in polyline:
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                points.append((float(pair[0]), float(pair[1])))
+
+        if len(points) < 2:
+            return []
+
+        segments = []
+        cursor = 0
+        n = len(points)
+
+        while cursor < n:
+            # Find the earliest repeated vertex at/after cursor.  Its first
+            # occurrence marks the true start of a closed sub-shape.
+            first_index = {}
+            closure_start = closure_end = None
+            for i in range(cursor, n):
+                p = points[i]
+                if p in first_index:
+                    closure_start = first_index[p]
+                    closure_end = i
+                    break
+                first_index[p] = i
+
+            if closure_start is None:
+                # Remaining points form one ordinary open polyline.
+                if n - cursor >= 2:
+                    segments.append(points[cursor:])
+                break
+
+            # Preserve any leading open section as its own shape.
+            if closure_start - cursor >= 2:
+                segments.append(points[cursor:closure_start])
+
+            # Closed loop, including the repeated closing vertex.
+            if closure_end - closure_start + 1 >= 3:
+                segments.append(points[closure_start:closure_end + 1])
+
+            cursor = closure_end + 1
+
+        return segments
+
+    if show_patrol_zones:
+        for item in poi_data.get("patrol_zones", []):
+            color = POI_COLORS["patrol_zones"]
+            kind = str(item.get("kind", "")).lower()
+            polyline = item.get("polyline") or []
+            if polyline and kind in {"path", "line"}:
+                for segment in split_patrol_polyline(polyline):
+                    coords = []
+                    for wx, wy in segment:
+                        sx, sy = pt(wx, wy)
+                        coords.extend((sx, sy))
+                    if len(coords) >= 4:
+                        canvas.create_line(
+                            *coords, fill=color, width=2.2 if not hud else 1.6,
+                            joinstyle="round", capstyle="round"
+                        )
+            else:
+                radii = item.get("radii") or {}
+                rx = float(radii.get("rx", 8.0)) * POI_RADIUS_WORLD_SCALE
+                ry = float(radii.get("ry", radii.get("rx", 8.0))) * POI_RADIUS_WORLD_SCALE
+                rot = math.radians(float(radii.get("rot", 0.0)))
+                cx, cy = float(item.get("x", 0.0)), float(item.get("y", 0.0))
+                coords = []
+                for i in range(49):
+                    a = (i / 48.0) * math.tau
+                    lx, ly = math.cos(a) * rx, math.sin(a) * ry
+                    wx = cx + lx * math.cos(rot) - ly * math.sin(rot)
+                    wy = cy + lx * math.sin(rot) + ly * math.cos(rot)
+                    sx, sy = pt(wx, wy)
+                    coords.extend((sx, sy))
+                canvas.create_line(
+                    *coords, fill=color, width=2.2 if not hud else 1.6, smooth=True
+                )
+
+    # Salt: small diamond markers and obey toggle.
+    if show_salt:
+        salt_color = POI_COLORS["salt_licks"]
+        salt_size = 4 if hud else 6
+        for item in poi_data.get("salt_licks", []):
+            sx, sy = pt(item.get("x", 0.0), item.get("y", 0.0))
+            canvas.create_polygon(
+                sx, sy-salt_size, sx+salt_size, sy,
+                sx, sy+salt_size, sx-salt_size, sy,
+                fill=salt_color, outline="#2f3640", width=1
+            )
+
 
 def _format_stat(value: float) -> str:
     if abs(value) < 10: return f"{value:.1f}"
@@ -439,6 +622,13 @@ class MiniMapPanel:
                     if 0 <= mx <= MINI_MAP_SIZE and 0 <= my <= MINI_MAP_SIZE:
                         self.canvas.create_oval(mx-2.5, my-2.5, mx+2.5, my+2.5, fill=color, outline="#000000", width=0.5)
         
+        # ADD-ONLY: draw extra Gateway POIs on HUD; old markers/layers above are unchanged.
+        if map_app_ref and getattr(map_app_ref, "gateway_pois", None):
+            def _hud_world_to_screen(pos: Position) -> tuple[float, float]:
+                pnx, pny = profile.to_normalized(pos)
+                return ((pnx - left) / frac * MINI_MAP_SIZE, (pny - top) / frac * MINI_MAP_SIZE)
+            _draw_gateway_pois(self.canvas, profile, map_app_ref.gateway_pois, _hud_world_to_screen, hud=True, visible=getattr(map_app_ref, "_zone_visible", None))
+
         if path_history and len(path_history) > 0:
             points = []
             for pos in path_history + [Position(x, y, 0.0)]:
@@ -723,7 +913,7 @@ class MapApp:
         self.ig_rendered_size: tuple[int, int] | None = None
 
         self._zone_images: dict[str, Image.Image] = {}
-        self._zone_visible: dict[str, bool] = {key: (False if key == "400OV" or key == "600OV" else True) for key, _label, _filename, _color in ZONE_LAYERS}
+        self._zone_visible: dict[str, bool] = {key: (False if key in {"400OV", "600OV"} else True) for key, _label, _filename, _color in MAP_TOGGLE_LAYERS}
         self._m_zone_toggle_hitboxes: dict[str, tuple[float, float, float, float]] = {}
         self._ig_zone_toggle_hitboxes: dict[str, tuple[float, float, float, float]] = {}
 
@@ -746,6 +936,7 @@ class MapApp:
         self.ingame_map_visible = False
 
         self.local_markers: list[dict] = []
+        self.gateway_pois: dict[str, list[dict]] = {"sanctuaries": [], "migrations": [], "patrol_zones": [], "salt_licks": []}
         self.overlay_vars: dict[str, ctk.BooleanVar] = {}
         self.overlay_colors: dict[str, str] = {}
         self.animal_keys: list[str] = []
@@ -778,6 +969,7 @@ class MapApp:
         self._build_ui()
         self._load_map_image()
         self._load_local_animal_herbs()
+        self._load_gateway_pois()
         self._redraw()
         self._start_tray()
         
@@ -829,6 +1021,24 @@ class MapApp:
             title = buf.value.lower().strip()
             return title == "the isle"
         except Exception: return False
+
+    def _load_gateway_pois(self) -> None:
+        """Load only Sanctuaries, Migrations, Patrol Zones and Salt from the second JSON file."""
+        json_file = GATEWAY_POI_JSON_PATH if GATEWAY_POI_JSON_PATH.exists() else GATEWAY_POI_JSON_FALLBACK
+        if not json_file.exists():
+            return
+        try:
+            data = json.loads(json_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return
+            self.gateway_pois = {
+                "sanctuaries": list(data.get("sanctuaries", []) or []),
+                "migrations": list(data.get("migrations", []) or []),
+                "patrol_zones": list(data.get("patrol_zones", []) or []),
+                "salt_licks": list(data.get("salt_licks", []) or []),
+            }
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            self.gateway_pois = {"sanctuaries": [], "migrations": [], "patrol_zones": [], "salt_licks": []}
 
     def _load_local_animal_herbs(self):
         json_file = LOCAL_JSON_PATH if LOCAL_JSON_PATH.exists() else LOCAL_JSON_FALLBACK
@@ -1912,6 +2122,10 @@ class MapApp:
                     if -10 <= px <= c_w + 10 and -10 <= py <= c_h + 10:
                         canvas.create_oval(px-3.5, py-3.5, px+3.5, py+3.5, fill=color, outline="#000000", width=0.8)
 
+        # ADD-ONLY: draw extra Gateway POIs on the large menu/in-game map.
+        if getattr(self, "gateway_pois", None):
+            _draw_gateway_pois(canvas, self.profile, self.gateway_pois, lambda pos: self._pixel(pos, is_ingame), hud=False, visible=self._zone_visible)
+
         if self.show_regions_var.get() and MAP_LABELS:
             for name, pos, color, size in MAP_LABELS:
                 x, y = self._pixel(pos, is_ingame)
@@ -1999,22 +2213,55 @@ class MapApp:
 
     def _draw_zone_toggles_on(self, canvas: tk.Canvas, is_ingame: bool) -> None:
         hitboxes = {}
-        if not getattr(self, '_zone_images', None): return
-        margin, chip_h = 14, 26
+        margin, chip_h, gap = 14, 26, 6
+        canvas_w = max(canvas.winfo_width(), 1)
         x, y = margin, canvas.winfo_height() - margin - chip_h
-        for key, label, _filename, color in ZONE_LAYERS:
-            if key not in self._zone_images: continue
+
+        for key, label, _filename, color in MAP_TOGGLE_LAYERS:
+            # Layer ảnh cũ chỉ hiện khi file ảnh tồn tại.
+            if key in {item[0] for item in ZONE_LAYERS} and key not in self._zone_images:
+                continue
+
+            # Ba layer JSON chỉ hiện nút khi JSON thực sự có dữ liệu tương ứng.
+            if key == "poi_sanctuaries" and not self.gateway_pois.get("sanctuaries"):
+                continue
+            if key == "poi_migrations" and not self.gateway_pois.get("migrations"):
+                continue
+            if key == "poi_patrol_zones" and not self.gateway_pois.get("patrol_zones"):
+                continue
+            if key == "poi_salt" and not self.gateway_pois.get("salt_licks"):
+                continue
+
             active = self._zone_visible.get(key, False)
             text = f"{'■' if active else '□'} {label.upper()}"
-            text_id = canvas.create_text(x + 10, y + chip_h / 2, text=text, fill="#ffffff" if active else "#8395a7", font=("Segoe UI", 8, "bold"), anchor="w")
-            bbox = canvas.bbox(text_id)
+
+            # Đo trước chiều rộng để tự xuống dòng khi quá mép map.
+            probe = canvas.create_text(-10000, -10000, text=text, font=("Segoe UI", 8, "bold"), anchor="w")
+            bbox = canvas.bbox(probe)
+            canvas.delete(probe)
             chip_w = (bbox[2] - bbox[0]) + 20 if bbox else 90
-            rect_id = canvas.create_rectangle(x, y, x + chip_w, y + chip_h, fill=color if active else "#141b24", outline=color if active else "#212e3d", width=1.2)
+            if x + chip_w > canvas_w - margin and x > margin:
+                x = margin
+                y -= chip_h + gap
+
+            text_id = canvas.create_text(
+                x + 10, y + chip_h / 2, text=text,
+                fill="#ffffff" if active else "#8395a7",
+                font=("Segoe UI", 8, "bold"), anchor="w"
+            )
+            rect_id = canvas.create_rectangle(
+                x, y, x + chip_w, y + chip_h,
+                fill=color if active else "#141b24",
+                outline=color if active else "#212e3d", width=1.2
+            )
             canvas.tag_lower(rect_id, text_id)
             hitboxes[key] = (x, y, x + chip_w, y + chip_h)
-            x += chip_w + 6
-        if is_ingame: self._ig_zone_toggle_hitboxes = hitboxes
-        else: self._m_zone_toggle_hitboxes = hitboxes
+            x += chip_w + gap
+
+        if is_ingame:
+            self._ig_zone_toggle_hitboxes = hitboxes
+        else:
+            self._m_zone_toggle_hitboxes = hitboxes
 
     def _current_heading_degrees(self) -> float | None:
         if self._local_position_fresh() and getattr(self, '_local_heading_deg', None) is not None: return self._local_heading_deg
