@@ -3059,38 +3059,95 @@ class MapApp:
             "f": getattr(status, 'hunger', 0), "mf": getattr(status, 'max_hunger', 1)
         }
 
-        if getattr(self, '_hud', None) is None and (status.online or self._local_position_fresh()): 
-            self._hud = IslePilotHud(self.root, opacity=self.minimap_opacity)
+        if getattr(self, '_hud', None) is None and (
+            status.online
+            or self._local_position_fresh()
+            or getattr(self, "_local_has_position", False)
+        ):
+            self._hud = IslePilotHud(
+                self.root,
+                opacity=self.minimap_opacity
+            )
+
         if getattr(self, '_hud', None) is not None:
+            # IslePilot vẫn được dùng cho vitals/quests.
             self._hud.update_vitals(status)
             self._hud.update_quests(status)
-        if self._local_position_fresh(): return
-        
+
+        # LOCAL TELEMETRY LUÔN ƯU TIÊN POSITION/YAW.
+        #
+        # Khi đứng yên, packet local có thể ngừng > 2 giây nên
+        # _local_position_fresh() trở thành False. Tuy nhiên vị trí local
+        # cuối cùng vẫn là nguồn đúng. Vì vậy khi đã có local position hợp lệ,
+        # tuyệt đối không cho IslePilot/live web ghi đè self.current/yaw.
+        #
+        # _local_has_position chỉ được reset khi local telemetry thật sự
+        # mất game / thiếu Npcap / capture lỗi / session bị dừng.
+        if getattr(self, "_local_has_position", False):
+            return
+
         heading_changed = False
         if status.pos_yaw is not None:
             new_heading = self.profile.transform_yaw(status.pos_yaw)
-            heading_changed = new_heading != getattr(self, '_islepilot_heading_deg', None)
+            heading_changed = (
+                new_heading
+                != getattr(self, '_islepilot_heading_deg', None)
+            )
             self._islepilot_heading_deg = new_heading
-            
+
         position: Position | None = None
         position_changed = False
+
         if status.pos_x is not None and status.pos_y is not None:
-            position = Position(status.pos_y, status.pos_x, status.pos_z or 0.0)
+            position = Position(
+                status.pos_y,
+                status.pos_x,
+                status.pos_z or 0.0
+            )
+
             if position != self.current:
                 if self.current:
                     self.path_history.append(self.current)
                     if len(self.path_history) > MAX_HISTORY_POINTS:
                         self.path_history.pop(0)
+
                 self.current = position
                 position_changed = True
-                
-        if (position_changed or heading_changed) and (getattr(self, 'map_visible', False) or getattr(self, 'ingame_map_visible', False)): 
+
+        if (
+            (position_changed or heading_changed)
+            and (
+                getattr(self, 'map_visible', False)
+                or getattr(self, 'ingame_map_visible', False)
+            )
+        ):
             self._redraw()
-            
+
         draw_position = position or self.current
-        if getattr(self, '_hud', None) is not None and draw_position is not None:
-            heading = getattr(self, '_islepilot_heading_deg', 0.0) if getattr(self, '_islepilot_heading_deg', None) is not None else 0.0
-            self._hud.update_map(self.source_image, self.profile, draw_position.x, draw_position.y, heading, zone_images=self._active_zone_images(), path_history=self.path_history, show_regions=self.show_regions_var.get(), shape=self.minimap_shape, teammates=self.teammates, map_app_ref=self)
+
+        if (
+            getattr(self, '_hud', None) is not None
+            and draw_position is not None
+        ):
+            heading = (
+                getattr(self, '_islepilot_heading_deg', 0.0)
+                if getattr(self, '_islepilot_heading_deg', None) is not None
+                else 0.0
+            )
+
+            self._hud.update_map(
+                self.source_image,
+                self.profile,
+                draw_position.x,
+                draw_position.y,
+                heading,
+                zone_images=self._active_zone_images(),
+                path_history=self.path_history,
+                show_regions=self.show_regions_var.get(),
+                shape=self.minimap_shape,
+                teammates=self.teammates,
+                map_app_ref=self
+            )
 
     def _apply_focus_visibility(self) -> None:
         if (
